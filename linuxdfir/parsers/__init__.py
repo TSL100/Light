@@ -13,6 +13,20 @@ from collections.abc import Iterator
 from ..ingest import Evidence
 from ..schema import Event, artifacts_for_path
 
+HOME_USER_RE = re.compile(r"^/home/([^/]+)/")
+
+
+def user_for_path(original_path: str | None) -> str | None:
+    """Best-effort owner account for a per-user artifact path."""
+    if not original_path:
+        return None
+    if original_path == "/root" or original_path.startswith("/root/"):
+        return "root"
+    match = HOME_USER_RE.match(original_path)
+    if match:
+        return match.group(1)
+    return None
+
 ROTATED_SUFFIX_RE = re.compile(r"\.(\d+)(\.gz)?$")
 DATED_SUFFIX_RE = re.compile(r"-(\d{8})(?:\.gz)?$")
 
@@ -44,11 +58,24 @@ def _register(parsers: dict, module) -> None:
     parsers[module.PARSER_NAME] = module
 
 
+PARSER_MODULES = (
+    "auth_log",
+    "bash_history",
+    "cron",
+    "ld_preload",
+    "passwd_shadow_sudoers",
+    "profile_scripts",
+    "ssh",
+    "systemd_units",
+)
+
+
 def available_parsers() -> dict:
-    from . import auth_log
+    import importlib
 
     parsers: dict = {}
-    _register(parsers, auth_log)
+    for name in PARSER_MODULES:
+        _register(parsers, importlib.import_module(f"{__name__}.{name}"))
     return parsers
 
 

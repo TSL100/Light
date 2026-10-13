@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .detectors import ssh_bruteforce
+from .detectors import detect_all
 from .ingest import Evidence, EvidenceError, UnsafeArchiveError
 from .parsers import available_parsers, iter_members
 from .report import csv_report, html, json_report
@@ -40,8 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
     parse.add_argument("-o", "--out", required=True, help="output directory for events.jsonl")
     parse.add_argument(
         "--parsers",
-        default="auth_log",
-        help="comma-separated parser names (default: auth_log)",
+        default="all",
+        help="comma-separated parser names or 'all' (default: all)",
     )
     parse.set_defaults(func=cmd_parse)
     detect = sub.add_parser("detect", help="run detections over events.jsonl")
@@ -109,6 +109,8 @@ def cmd_parse(args: argparse.Namespace) -> int:
     with evidence:
         names = [name.strip() for name in args.parsers.split(",") if name.strip()]
         selected = available_parsers()
+        if "all" in names:
+            names = sorted(selected)
         unknown = [name for name in names if name not in selected]
         if unknown:
             print(f"parse failed: unknown parser(s): {', '.join(unknown)}", file=sys.stderr)
@@ -124,6 +126,15 @@ def cmd_parse(args: argparse.Namespace) -> int:
                     stats: dict = {}
                     try:
                         yield from module.parse_member(evidence, member, stats=stats)
+                    except (EvidenceError, UnsafeArchiveError) as exc:
+                        stats["error"] = str(exc)
+                    finally:
+                        member_stats.append({"parser": name, **stats})
+                parse_manifest = getattr(module, "parse_manifest", None)
+                if parse_manifest is not None:
+                    stats = {}
+                    try:
+                        yield from parse_manifest(evidence, stats=stats)
                     except (EvidenceError, UnsafeArchiveError) as exc:
                         stats["error"] = str(exc)
                     finally:
@@ -195,7 +206,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"detect failed: {exc}", file=sys.stderr)
         return EXIT_ERROR
-    findings = ssh_bruteforce.detect(events)
+    findings = detect_all(events)
     if args.out:
         outdir = Path(args.out)
         outdir.mkdir(parents=True, exist_ok=True)

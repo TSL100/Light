@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .. import __version__ as ANALYZER_VERSION
-from ..detectors import ssh_bruteforce
+from ..detectors import RULE_INFO as DETECTOR_RULE_INFO
 from ..ingest import RULE_INFO as INGEST_RULE_INFO
 from ..mitre import TACTIC_ORDER, tactics_for, technique_name
 from ..schema import Finding, Severity
@@ -169,7 +169,7 @@ WINDOW_CAP = 300
 
 SEVERITY_ORDER = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]
 
-RULE_GUIDANCE = dict(getattr(ssh_bruteforce, "RULE_INFO", {}))
+RULE_GUIDANCE = dict(DETECTOR_RULE_INFO)
 RULE_GUIDANCE.update(INGEST_RULE_INFO)
 
 FALLBACK_GUIDANCE = {

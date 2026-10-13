@@ -128,6 +128,7 @@ FILE_TARGETS = (
     ("/etc/sudoers", "users"),
     ("/etc/sudoers.d/*", "users"),
     ("/etc/crontab", "persistence"),
+    ("/etc/anacrontab", "persistence"),
     ("/etc/cron.*", "persistence"),
     ("/var/spool/cron/*", "persistence"),
     ("/etc/systemd/system", "persistence"),

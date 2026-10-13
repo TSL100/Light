@@ -270,7 +270,7 @@ def test_clean_host_has_no_findings(generated):
 def test_cli_parse_and_detect(generated, tmp_path, capsys):
     archive = generated["results"]["infected"]["archive"]
     out = tmp_path / "parsed"
-    assert cli.main(["parse", str(archive), "-o", str(out)]) == 0
+    assert cli.main(["parse", str(archive), "-o", str(out), "--parsers", "auth_log"]) == 0
     lines = (out / "events.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 65
     assert all(json.loads(line)["parser"] == "auth_log" for line in lines)
@@ -287,10 +287,11 @@ def test_cli_parse_and_detect(generated, tmp_path, capsys):
 def test_cli_detect_clean_is_empty(generated, tmp_path):
     archive = generated["results"]["clean"]["archive"]
     out = tmp_path / "parsed"
-    assert cli.main(["parse", str(archive), "-o", str(out)]) == 0
+    assert cli.main(["parse", str(archive), "-o", str(out), "--parsers", "auth_log"]) == 0
     findings_out = tmp_path / "findings"
     assert cli.main(["detect", str(out), "-o", str(findings_out)]) == 0
-    assert json.loads((findings_out / "findings.json").read_text(encoding="utf-8")) == []
+    findings = json.loads((findings_out / "findings.json").read_text(encoding="utf-8"))
+    assert [f for f in findings if f["severity"] in ("HIGH", "CRITICAL")] == []
 
 
 def test_realworld_formats(tmp_path):

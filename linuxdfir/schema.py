@@ -237,10 +237,16 @@ ARTIFACTS: dict[str, ArtifactSpec] = {
         ("/home/*/.viminfo", "/root/.viminfo"),
         "vim history per user",
     ),
+    "python_history": ArtifactSpec(
+        "python_history",
+        ("/home/*/.python_history", "/root/.python_history"),
+        "python REPL history per user",
+    ),
     "cron": ArtifactSpec(
         "cron",
         (
             "/etc/crontab",
+            "/etc/anacrontab",
             "/etc/cron.d/*",
             "/etc/cron.hourly/*",
             "/etc/cron.daily/*",

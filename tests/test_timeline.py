@@ -266,7 +266,7 @@ def test_large_stream_stays_bounded(tmp_path):
 def test_cli_parse_writes_timeline_outputs(generated, tmp_path):
     archive = generated["results"]["infected"]["archive"]
     out = tmp_path / "parsed"
-    assert cli.main(["parse", str(archive), "-o", str(out)]) == 0
+    assert cli.main(["parse", str(archive), "-o", str(out), "--parsers", "auth_log"]) == 0
     assert (out / "timeline.db").is_file()
     assert (out / "timeline.csv").is_file()
     stats = json.loads((out / "timeline_stats.json").read_text(encoding="utf-8"))
