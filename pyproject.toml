@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linuxdfir"
+version = "0.1.0"
+description = "LinuxDFIR Toolkit: Linux host collector plus Windows-side analyzer for authorized DFIR work"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = ["tzdata>=2024.1"]
+
+[project.optional-dependencies]
+remote = ["paramiko>=3.4"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+linuxdfir = "linuxdfir.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["linuxdfir*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["collector/linux_collector.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

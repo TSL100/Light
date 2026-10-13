@@ -1,0 +1,30 @@
+Dec 31 23:58:44 web01 sshd[1910]: Accepted publickey for admin from 10.0.0.7 port 42111 ssh2: ED25519 SHA256:legit
+Jan  1 00:03:12 web01 sshd[1910]: pam_unix(sshd:session): session closed for user admin
+Jan  2 03:10:07 web01 sshd[4101]: Failed password for invalid user admin from 203.0.113.9 port 51234 ssh2
+Jan  2 03:10:09 web01 sshd[4102]: Failed password for root from 203.0.113.9 port 51235 ssh2
+Jan  2 03:10:11 web01 sshd[4103]: Failed publickey for invalid user test from 2001:db8::1 port 443 ssh2
+Jan  2 03:10:13 web01 sshd[4104]: Failed password for invalid user foo bar from 203.0.113.9 port 51236 ssh2
+Jan  2 03:10:15 web01 sshd[4105]: Failed password for invalid user admin<script>alert(1)</script> from 203.0.113.9 port 51237 ssh2
+Jan  2 03:10:17 web01 sshd[4106]: Invalid user foo bar from 203.0.113.9 port 51238
+Jan  2 03:11:02 web01 sshd[4110]: Accepted password for alice from 10.0.0.7 port 43110 ssh2
+Jan  2 03:11:03 web01 sshd[4110]: pam_unix(sshd:session): session opened for user alice by (uid=0)
+Jan  2 03:12:00 web01 su[4200]: pam_unix(su:session): session opened for user root by alice(uid=1001)
+Jan  2 03:12:01 web01 su[4200]: pam_unix(su:session): session closed for user root
+Jan  2 03:13:20 web01 sudo:     alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/bin/bash
+Jan  2 03:13:25 web01 sudo:     bob : user NOT in sudoers ; TTY=pts/1 ; PWD=/home/bob ; USER=root ; COMMAND=/bin/ls
+Jan  2 03:14:00 web01 sshd[4150]: Disconnected from invalid user admin 203.0.113.9 port 51234 [preauth]
+Jan  2 03:14:01 web01 sshd[4151]: Received disconnect from 203.0.113.9 port 51235:11: Bye Bye [preauth]
+Jan  2 03:14:02 web01 sshd[4152]: Connection closed by 203.0.113.9 port 51236 [preauth]
+Jan  2 03:15:00 web01 CRON[4200]: pam_unix(cron:session): session opened for user root by (uid=0)
+Jan  2 03:15:00 web01 CRON[4200]: (root) CMD (/tmp/.x/run.sh)
+Jan  2 03:15:01 web01 useradd[4300]: new user: name=evil, UID=1002, GID=1002, home=/home/evil, shell=/bin/bash
+Jan  2 03:15:02 web01 groupadd[4301]: new group: name=evil, GID=1002
+Jan  2 03:15:03 web01 passwd[4302]: password for 'evil' changed by 'root'
+Jan  2 03:15:04 web01 usermod[4303]: add 'evil' to group 'sudo'
+2026-01-02T03:16:00+02:00 web01 sshd[4400]: Accepted keyboard-interactive for bob from 10.0.0.8 port 44000 ssh2
+Jan  2 03:17:00 web01 sshd[4500]: Failed password for root from 203.0.113.9 port 51300 ssh2
+Jan  2 03:17:01 web01 rsyslogd: last message repeated 4 times
+Feb 30 00:00:00 web01 sshd[1]: Failed password for root from 1.2.3.4 port 5 ssh2
+this is not a log line at all
+Jan  2 03:18:00 web01 sshd[4600]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.9 user=root
+12345 not iso at all
