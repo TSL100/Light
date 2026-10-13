@@ -1,5 +1,4 @@
 import gzip
-import hashlib
 import io
 import json
 import tarfile
@@ -7,45 +6,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import make_mini_evidence
+from conftest import flip_first_byte, make_mini_evidence, repack_variant
 
 from linuxdfir import cli
 from linuxdfir.ingest import Evidence, EvidenceError, UnsafeArchiveError, resolve_tzinfo
 from linuxdfir.schema import Severity
-
-
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        digest.update(handle.read())
-    return digest.hexdigest()
-
-
-def repack_variant(src, dst, *, modify=None, drop=(), add=None, sidecar="correct"):
-    with tarfile.open(src, "r:gz") as tar:
-        blobs = {m.name: tar.extractfile(m).read() for m in tar.getmembers() if m.isfile()}
-    for name in drop:
-        del blobs[name]
-    blobs.update(modify or {})
-    blobs.update(add or {})
-    with tarfile.open(dst, "w:gz") as tar:
-        for name, data in blobs.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(data)
-            tar.addfile(info, io.BytesIO(data))
-    sidecar_path = Path(str(dst) + ".sha256")
-    if sidecar == "correct":
-        sidecar_path.write_text(f"{sha256_file(dst)}  {Path(dst).name}\n", encoding="ascii")
-    elif sidecar == "wrong":
-        sidecar_path.write_text(f"{'0' * 64}  {Path(dst).name}\n", encoding="ascii")
-    elif sidecar == "missing":
-        if sidecar_path.exists():
-            sidecar_path.unlink()
-    return dst
-
-
-def flip_first_byte(data: bytes) -> bytes:
-    return bytes([data[0] ^ 0xFF]) + data[1:]
 
 
 def make_tar(path, entries):

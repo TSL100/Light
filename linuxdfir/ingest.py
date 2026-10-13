@@ -25,6 +25,21 @@ GZIP_MAGIC = b"\x1f\x8b"
 SIDECAR_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
+RULE_INFO = {
+    "evidence_integrity": {
+        "why": (
+            "A hash mismatch, missing file or unlisted file means the evidence changed after "
+            "collection (or was tampered with in transit). Findings built on altered evidence "
+            "cannot be trusted until integrity is re-established."
+        ),
+        "next_steps": [
+            "Re-acquire the evidence from the source host if possible.",
+            "Compare the archive SHA256 sidecar against the value recorded at collection time.",
+            "Treat every downstream finding from this bundle as UNRELIABLE until resolved.",
+        ],
+    },
+}
+
 
 class UnsafeArchiveError(ValueError):
     """Raised when an evidence container holds unsafe member names or links."""

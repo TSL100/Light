@@ -19,6 +19,44 @@ RULE_SUCCESS = "ssh_bruteforce_then_success"
 RULE_BRUTEFORCE = "ssh_bruteforce"
 RULE_SPRAY = "ssh_password_spraying"
 
+RULE_INFO = {
+    RULE_SUCCESS: {
+        "why": (
+            "Repeated failed logins followed by a success from the same source means an attacker "
+            "very likely guessed or brute-forced valid credentials and now holds interactive access."
+        ),
+        "next_steps": [
+            "Isolate the host from the network if the session may still be active.",
+            "Force a password reset (and key rotation) for the compromised account on all hosts.",
+            "Inspect ~/.ssh/authorized_keys for newly added keys and remove attacker keys.",
+            "Review shell history, cron jobs and systemd units for post-compromise persistence.",
+            "Block the source IP at the perimeter and hunt for it in other hosts' auth logs.",
+        ],
+    },
+    RULE_BRUTEFORCE: {
+        "why": (
+            "A high rate of failed logins from one source is an active guessing attack. "
+            "Even without an observed success it probes credential hygiene and may precede compromise."
+        ),
+        "next_steps": [
+            "Block or rate-limit the source IP (fail2ban, firewall).",
+            "Confirm no accepted login from that source exists in the full (non-rotated) logs.",
+            "Enforce key-only SSH authentication and disable password logins where possible.",
+        ],
+    },
+    RULE_SPRAY: {
+        "why": (
+            "One source failing across many distinct usernames is password spraying: low-and-slow "
+            "guessing designed to stay under per-account lockout thresholds."
+        ),
+        "next_steps": [
+            "Block the source IP and check whether any sprayed account shows a later success.",
+            "Audit the sprayed accounts for weak or default passwords; enforce MFA.",
+            "Correlate the source IP across the fleet for a distributed campaign.",
+        ],
+    },
+}
+
 
 def _weight(event: Event) -> int:
     return max(1, getattr(event, "repeat_count", 1))

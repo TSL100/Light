@@ -11,7 +11,8 @@ from . import __version__
 from .detectors import ssh_bruteforce
 from .ingest import Evidence, EvidenceError, UnsafeArchiveError
 from .parsers import available_parsers, iter_members
-from .schema import Event
+from .report import csv_report, html, json_report
+from .schema import Event, Finding
 from .timeline import Timeline
 
 EXIT_OK = 0
@@ -47,6 +48,14 @@ def build_parser() -> argparse.ArgumentParser:
     detect.add_argument("events", help="events.jsonl file or a directory containing it")
     detect.add_argument("-o", "--out", default=None, help="output directory for findings.json")
     detect.set_defaults(func=cmd_detect)
+    run = sub.add_parser("run", help="verify + parse + detect + report in one step")
+    run.add_argument("evidence", help="evidence.tar.gz file or an extracted evidence folder")
+    run.add_argument("-o", "--out", required=True, help="output directory")
+    run.set_defaults(func=cmd_run)
+    report = sub.add_parser("report", help="build report.html/findings.csv from a parsed output directory")
+    report.add_argument("out", help="output directory holding events.jsonl/findings.json (from parse/detect or run)")
+    report.add_argument("--report-name", default="report.html", help="report file name")
+    report.set_defaults(func=cmd_report)
     return parser
 
 
@@ -129,6 +138,9 @@ def cmd_parse(args: argparse.Namespace) -> int:
             jsonl_count = timeline.write_jsonl(outdir / "events.jsonl")
             csv_count = timeline.write_csv(outdir / "timeline.csv")
             tl_stats = timeline.stats()
+        (outdir / "manifest.json").write_text(
+            json.dumps(evidence.manifest, indent=2) + "\n", encoding="utf-8"
+        )
         errors = [entry for entry in member_stats if entry.get("error")]
         (outdir / "parse_stats.json").write_text(json.dumps(member_stats, indent=2) + "\n", encoding="utf-8")
         (outdir / "timeline_stats.json").write_text(
@@ -187,9 +199,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
     if args.out:
         outdir = Path(args.out)
         outdir.mkdir(parents=True, exist_ok=True)
-        (outdir / "findings.json").write_text(
-            json.dumps([finding.to_dict() for finding in findings], indent=2) + "\n", encoding="utf-8"
-        )
+        json_report.write_findings(findings, outdir / "findings.json")
         print(f"findings         : {len(findings)} -> {outdir / 'findings.json'}")
     else:
         print(f"findings         : {len(findings)}")
@@ -201,6 +211,40 @@ def cmd_detect(args: argparse.Namespace) -> int:
         print(f"  [{finding.severity.value.upper():8}] {finding.rule}: {finding.title}")
         print(f"           count={finding.count} mitre={','.join(finding.mitre_ids)} refs={refs}{extra}")
     return EXIT_OK
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    outdir = Path(args.out)
+    findings_path = outdir / "findings.json"
+    if not findings_path.is_file():
+        print(f"report failed: {findings_path} not found (run parse and detect first)", file=sys.stderr)
+        return EXIT_ERROR
+    try:
+        findings = [Finding.from_dict(item) for item in json.loads(findings_path.read_text(encoding="utf-8"))]
+        target = html.build_report(outdir, report_name=args.report_name)
+        csv_report.write_csv(findings, outdir / "findings.csv")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"report failed: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    print(f"report           : {target}")
+    print(f"findings csv     : {outdir / 'findings.csv'}")
+    return EXIT_OK
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    outdir = Path(args.out)
+    outdir.mkdir(parents=True, exist_ok=True)
+    verify_code = cmd_verify(argparse.Namespace(evidence=args.evidence, report_dir=str(outdir)))
+    parse_code = cmd_parse(argparse.Namespace(evidence=args.evidence, out=str(outdir), parsers="auth_log"))
+    if parse_code != EXIT_OK:
+        return parse_code
+    detect_code = cmd_detect(argparse.Namespace(events=str(outdir), out=str(outdir)))
+    if detect_code != EXIT_OK:
+        return detect_code
+    report_code = cmd_report(argparse.Namespace(out=str(outdir), report_name="report.html"))
+    if report_code != EXIT_OK:
+        return report_code
+    return EXIT_INTEGRITY if verify_code == EXIT_INTEGRITY else EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
