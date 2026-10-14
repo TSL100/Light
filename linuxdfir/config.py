@@ -68,6 +68,15 @@ FALLBACK_DEFAULTS: dict = {
             "alpine", "ubuntu", "debian", "busybox",
         ],
     },
+    "scoring": {
+        "cap": 100,
+        "weights": {"critical": 100, "high": 40, "medium": 10, "low": 2, "info": 0},
+    },
+    "severity_overrides": {},
+    "allowlist": {"findings": []},
+    "correlation": {"min_chain_length": 2, "rare_user_max_findings": 5},
+    "ioc": {"max_per_type": 200, "suppress": []},
+    "business_hours": {"start": 8, "end": 18},
 }
 
 

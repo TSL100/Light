@@ -88,3 +88,45 @@ allowlist_images = [
     "postgres", "mysql", "mariadb", "mongo",
     "alpine", "ubuntu", "debian", "busybox",
 ]
+
+[scoring]
+# Host risk score = sum of per-finding severity weights, capped at `cap`.
+# Weights are fully transparent: every contributing finding is listed in
+# risk.json and the HTML report.
+cap = 100
+[scoring.weights]
+critical = 100
+high = 40
+medium = 10
+low = 2
+info = 0
+
+[severity_overrides]
+# Force a rule to a fixed severity regardless of what the detector
+# decided (applied before scoring and dedup).
+# sshd_config_weakening = "info"
+
+[allowlist]
+# Suppress findings. Each entry: required `rule`, optional
+# `title_contains` (substring of the title) and `path` (substring of
+# title+description). An entry with only `rule` drops every finding of
+# that rule.
+findings = []
+# findings = [{ rule = "login_anomalies", title_contains = "Unusual-hour" }]
+
+[correlation]
+# Findings sharing an entity (IP, path, or rare username) chain together.
+# Components smaller than min_chain_length are left unchained.
+min_chain_length = 2
+rare_user_max_findings = 5
+
+[ioc]
+# Per-type display cap and exact values to drop from the IOC tables.
+max_per_type = 200
+suppress = []
+
+[business_hours]
+# Host-local business window; logins outside it raise the unusual-hour
+# finding in login_anomalies.
+start = 8
+end = 18

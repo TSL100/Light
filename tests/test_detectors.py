@@ -441,7 +441,9 @@ class TestEndToEnd:
         "kernel_module_load": 1,
         "timestomp_detection": 1,
         "executables_in_dev_shm": 1,
-        "suspicious_processes": 3,
+        # 2 of the 4 scratch-process findings merge into the filesystem
+        # findings for the same paths in step-8 cross-rule dedup.
+        "suspicious_processes": 2,
         "recent_changes_in_sensitive_paths": 1,
     }
 

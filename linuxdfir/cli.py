@@ -9,11 +9,15 @@ from pathlib import Path
 
 from . import __version__
 from .config import load_config
+from .correlate import correlate_findings
 from .detectors import detect_all
 from .ingest import Evidence, EvidenceError, UnsafeArchiveError
+from .iocs import extract_iocs
+from .merge import postprocess_findings
 from .parsers import available_parsers, iter_members, skipped_members
 from .report import csv_report, html, json_report
 from .schema import Event, Finding, Severity
+from .score import score_findings
 from .timeline import Timeline
 
 EXIT_OK = 0
@@ -298,7 +302,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"detect failed: bad config: {exc}", file=sys.stderr)
         return EXIT_ERROR
-    findings = detect_all(events, config=config)
+    findings = postprocess_findings(detect_all(events, config=config), config)
     info_count = sum(1 for finding in findings if finding.severity == Severity.INFO)
     real_count = len(findings) - info_count
     headline = f"{real_count} actionable + {info_count} info"
@@ -306,7 +310,34 @@ def cmd_detect(args: argparse.Namespace) -> int:
         outdir = Path(args.out)
         outdir.mkdir(parents=True, exist_ok=True)
         json_report.write_findings(findings, outdir / "findings.json")
+        iocs = extract_iocs(events, findings, config)
+        (outdir / "iocs.json").write_text(
+            json.dumps(iocs, indent=2) + "\n", encoding="utf-8"
+        )
+        correlation = correlate_findings(findings, config)
+        (outdir / "correlation.json").write_text(
+            json.dumps(correlation, indent=2) + "\n", encoding="utf-8"
+        )
+        risk = score_findings(findings, events, config)
+        (outdir / "risk.json").write_text(
+            json.dumps(risk, indent=2) + "\n", encoding="utf-8"
+        )
         print(f"findings         : {headline} -> {outdir / 'findings.json'}")
+        print(
+            f"iocs             : {len(iocs['external'])} external, "
+            f"{len(iocs['internal'])} internal -> {outdir / 'iocs.json'}"
+        )
+        print(
+            f"attack chains    : {len(correlation['chains'])} "
+            f"-> {outdir / 'correlation.json'}"
+        )
+        host_scores = risk.get("hosts", {})
+        for host_name, host_data in host_scores.items():
+            print(
+                f"risk score       : {host_name}={host_data['score']} "
+                f"(raw {host_data['raw_score']}, cap {host_data['cap']}) "
+                f"-> {outdir / 'risk.json'}"
+            )
     else:
         print(f"findings         : {headline}")
     if skipped:

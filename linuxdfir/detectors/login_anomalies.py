@@ -1,19 +1,23 @@
 """Login anomalies from binary login records (wtmp/btmp/lastlog).
 
 Correlates successful wtmp logins with btmp failures from the same IP
-(brute-force-then-login), flags btmp spikes and logins at unusual local
-hours (host timezone, carried in the parser message), plus direct root
-logins not already explained by a brute-force correlation.
+(brute-force-then-login), flags btmp spikes and logins outside the
+configured business-hours window (host timezone, carried in the parser
+message), plus direct root logins not already explained by a
+brute-force correlation.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
+from ..config import load_config
 from ..parsers.wtmp_btmp_lastlog import parse_login_message
 from ..schema import Event, Finding, Ref, Severity, make_finding_id
 
 RULE = "login_anomalies"
+
+USES_CONFIG = True
 
 RULE_INFO = {
     RULE: {
@@ -32,14 +36,38 @@ RULE_INFO = {
 }
 
 
+def _outside_business_hours(hour: int, start: int, end: int) -> bool:
+    """True when `hour` falls outside the [start, end) business window."""
+    if start == end:
+        return False
+    if start < end:
+        return hour < start or hour >= end
+    return start <= hour < end
+
+
+def _time_span(events: list) -> tuple:
+    stamps = [event.timestamp_utc for event in events if event.timestamp_utc is not None]
+    if not stamps:
+        return None, None
+    return min(stamps), max(stamps)
+
+
 def detect(
     events: Iterable[Event],
     *,
-    night_start: int = 0,
-    night_end: int = 5,
+    config: dict | None = None,
+    night_start: int | None = None,
+    night_end: int | None = None,
     spike_threshold: int = 20,
     spike_window: int = 600,
 ) -> list[Finding]:
+    cfg = config if config is not None else load_config()
+    hours = cfg.get("business_hours", {}) or {}
+    start = int(hours.get("start", 8))
+    end = int(hours.get("end", 18))
+    if night_start is not None:
+        start = night_start
+        end = night_end if night_end is not None else end
     logins: list[tuple[Event, dict]] = []
     failures: list[tuple[Event, dict]] = []
     lastlogs: list[tuple[Event, dict]] = []
@@ -69,11 +97,15 @@ def detect(
     for event, info in logins:
         if info["ip"] in failure_ips:
             correlated.add(id(event))
-            extra_refs = [
-                Ref(evt.evidence_path, evt.line_or_offset)
+            extra_events = [
+                evt
                 for evt in lastlog_by_ip.get(info["ip"], [])
                 if info["user"] == "root"
             ]
+            extra_refs = [
+                Ref(evt.evidence_path, evt.line_or_offset) for evt in extra_events
+            ]
+            first_seen, last_seen = _time_span([event, *extra_events])
             findings.append(
                 Finding(
                     id=make_finding_id(RULE, "bruteforced-ip", info["user"] or "?", info["ip"]),
@@ -86,6 +118,8 @@ def detect(
                         + (" Root last-login corroborates." if extra_refs else "")
                     ),
                     mitre_ids=["T1078"],
+                    first_seen=first_seen,
+                    last_seen=last_seen,
                     count=1,
                     refs=[Ref(event.evidence_path, event.line_or_offset), *extra_refs],
                 )
@@ -120,19 +154,28 @@ def detect(
     night: dict[str, list] = {}
     for event, info in logins:
         hour = info.get("hour")
-        if hour is None or not night_start <= hour < night_end:
+        if hour is None or not _outside_business_hours(hour, start, end):
             continue
         night.setdefault(info["user"] or "?", []).append(event)
     for user in sorted(night):
         evts = night[user]
+        first_seen, last_seen = _time_span(evts)
         findings.append(
             Finding(
                 id=make_finding_id(RULE, "night-login", user),
                 rule=RULE,
                 severity=Severity.LOW,
-                title=f"Unusual-hour login(s) for {user} ({night_start:02d}:00-{night_end:02d}:00 local)",
-                description=f"{len(evts)} login(s) during night hours (host-local time).",
+                title=(
+                    f"Unusual-hour login(s) for {user} "
+                    f"(outside business hours {start:02d}:00-{end:02d}:00 local)"
+                ),
+                description=(
+                    f"{len(evts)} login(s) outside business hours "
+                    f"{start:02d}:00-{end:02d}:00 (host-local time)."
+                ),
                 mitre_ids=["T1078"],
+                first_seen=first_seen,
+                last_seen=last_seen,
                 count=len(evts),
                 refs=[Ref(event.evidence_path, event.line_or_offset) for event in evts],
             )
@@ -149,6 +192,8 @@ def detect(
                 title=f"Direct root login from {info['ip']}",
                 description=f"root logged in from {info['ip']} ({info['tty']}) with no btmp failures from it.",
                 mitre_ids=["T1078"],
+                first_seen=event.timestamp_utc,
+                last_seen=event.timestamp_utc,
                 count=1,
                 refs=[Ref(event.evidence_path, event.line_or_offset)],
             )
@@ -164,6 +209,8 @@ def detect(
                 title=f"Direct root last-login from {info['ip']}",
                 description=f"uid 0 last recorded from {info['ip']} ({info['tty']}) with no btmp failures from it.",
                 mitre_ids=["T1078"],
+                first_seen=event.timestamp_utc,
+                last_seen=event.timestamp_utc,
                 count=1,
                 refs=[Ref(event.evidence_path, event.line_or_offset)],
             )

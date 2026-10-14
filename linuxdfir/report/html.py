@@ -74,7 +74,13 @@ details{margin:8px 0}
 summary{cursor:pointer;color:#58a6ff}
 .note{color:#8b949e;font-size:12px}
 ul.tight{margin:6px 0;padding-left:20px}
-ul.tight li{margin:2px 0}"""
+ul.tight li{margin:2px 0}
+.copy-btn{background:#1c2128;color:#8b949e;border:1px solid #30363d;border-radius:4px;
+padding:2px 8px;cursor:pointer;font-size:11px}
+.copy-btn:hover{color:#e6edf3;border-color:#58a6ff}
+.risk-score{font-size:28px;font-weight:700}
+ol.tight{margin:6px 0;padding-left:28px}
+ol.tight li{margin:4px 0}"""
 
 JS_TEXT = """(function(){
 var timeline = JSON.parse(document.getElementById('timeline-data').textContent);
@@ -159,6 +165,24 @@ function fillSelect(id, values){
       }
     });
   }
+  document.addEventListener('click', function(e){
+    var btn = e.target;
+    if(!btn || !btn.classList || !btn.classList.contains('copy-btn')){ return; }
+    var text = btn.getAttribute('data-copy') || '';
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch(err) {}
+      document.body.removeChild(ta);
+    }
+    var prev = btn.textContent;
+    btn.textContent = 'copied';
+    setTimeout(function(){ btn.textContent = prev; }, 1200);
+  });
   render();
 })();
 })();"""
@@ -390,6 +414,177 @@ def _finding_sort_key(finding: Finding) -> tuple:
     return (SEVERITY_ORDER.index(finding.severity), finding.rule, first)
 
 
+IOC_TABLE_CAP = 200
+
+NOT_ANALYZED_STATIC = (
+    "Memory dump / hibernation image — not collected; the process list is a live snapshot, not RAM.",
+    "Full disk image — only selected artifacts were collected; unallocated space is unavailable.",
+    "Packet capture / netflow — no network traffic evidence in this archive.",
+    "Browser artifacts, mail stores, editor swap files — not collected.",
+    "Cloud provider / EDR telemetry — outside the collector's scope.",
+)
+
+
+def _risk_section(risk: dict) -> str:
+    hosts = risk.get("hosts") or {}
+    if not hosts:
+        return "<p class='note'>No risk score computed (run detect with an output directory).</p>"
+    parts = ['<div class="grid">']
+    for host_name, data in hosts.items():
+        raw = data.get("raw_score", 0)
+        score = data.get("score", 0)
+        cap = data.get("cap", 0)
+        parts.append(
+            f"<div class='card'><b>{esc(host_name)}</b><br>"
+            f"<span class='risk-score'>{esc(score)}</span>"
+            f" <span class='meta'>/ {esc(cap)} cap (raw sum {esc(raw)})</span>"
+        )
+        by_sev = data.get("by_severity") or {}
+        if by_sev:
+            detail = " · ".join(f"{sev}×{count}" for sev, count in sorted(by_sev.items()))
+            parts.append(f"<div class='meta'>{esc(detail)}</div>")
+        parts.append("</div>")
+    parts.append("</div>")
+    method = risk.get("method")
+    if method:
+        parts.append(f"<p class='note'>Method: {esc(method)}</p>")
+    users = risk.get("users") or {}
+    if users:
+        parts.append("<h3>Per-user scores</h3><table>")
+        parts.append("<tr><th>User</th><th>Score</th><th>Findings</th><th>Contributing rules</th></tr>")
+        for user in sorted(users, key=lambda name: -users[name].get("score", 0)):
+            row = users[user]
+            rules = sorted({item.get("rule", "") for item in row.get("breakdown", [])})
+            parts.append(
+                f"<tr><td class='mono'>{esc(user)}</td><td>{esc(row.get('score'))}</td>"
+                f"<td>{esc(row.get('findings'))}</td>"
+                f"<td class='mono'>{esc(', '.join(rules))}</td></tr>"
+            )
+        parts.append("</table>")
+    breakdown = []
+    for data in hosts.values():
+        breakdown.extend(data.get("breakdown") or [])
+    if breakdown:
+        parts.append("<h3>Score breakdown</h3><table>")
+        parts.append("<tr><th>Weight</th><th>Severity</th><th>Rule</th><th>Finding</th></tr>")
+        for row in breakdown:
+            sev = row.get("severity", "")
+            parts.append(
+                f"<tr><td>{esc(row.get('weight'))}</td>"
+                f"<td><span class='sev sev-{esc(sev)}'>{esc(str(sev).upper())}</span></td>"
+                f"<td class='mono'>{esc(row.get('rule'))}</td><td>{esc(row.get('title'))}</td></tr>"
+            )
+        parts.append("</table>")
+    return "".join(parts)
+
+
+def _narrative_section(correlation: dict) -> str:
+    chains = correlation.get("chains") or []
+    coverage = correlation.get("tactic_coverage") or []
+    if not chains and not coverage:
+        return (
+            "<p class='note'>No multi-finding attack chain met the correlation "
+            "threshold and no findings carry MITRE mappings.</p>"
+        )
+    parts = []
+    if not chains:
+        parts.append(
+            "<p class='note'>No chain of two or more findings linked by a shared "
+            "IP, path or rare username was found.</p>"
+        )
+    for chain in chains:
+        confidence = chain.get("confidence", 0)
+        label = chain.get("confidence_label", "low")
+        parts.append(
+            f"<h3>Chain <span class='mono'>{esc(chain.get('id'))}</span> — "
+            f"{esc(label)} confidence ({esc(confidence)})</h3>"
+        )
+        parts.append(f"<p>{esc(chain.get('narrative', ''))}</p>")
+        parts.append("<ol class='tight'>")
+        for step in chain.get("steps", []):
+            sev = step.get("severity", "info")
+            when = step.get("first_seen") or "undated"
+            parts.append(
+                f"<li><span class='sev sev-{esc(sev)}'>{esc(str(sev).upper())}</span> "
+                f"<b>{esc(step.get('title'))}</b> "
+                f"<span class='meta mono'>{esc(step.get('rule'))} · {esc(when)}</span></li>"
+            )
+        parts.append("</ol>")
+        tactic_names = chain.get("tactic_names") or []
+        if tactic_names:
+            chips = "".join(f"<span class='mitre-chip'>{esc(name)}</span>" for name in tactic_names)
+            parts.append(f"<div>{chips}</div>")
+    if coverage:
+        parts.append("<h3>Tactic coverage</h3><table>")
+        parts.append("<tr><th>Tactic</th><th>Findings</th><th>Rules</th></tr>")
+        for row in coverage:
+            parts.append(
+                f"<tr><td>{esc(row.get('tactic_id'))} · {esc(row.get('name'))}</td>"
+                f"<td>{esc(row.get('finding_count'))}</td>"
+                f"<td class='mono'>{esc(', '.join(row.get('rules') or []))}</td></tr>"
+            )
+        parts.append("</table>")
+    return "".join(parts)
+
+
+def _ioc_section(iocs_data: dict) -> str:
+    external = iocs_data.get("external") or []
+    internal = iocs_data.get("internal") or []
+    if not external and not internal:
+        return "<p class='note'>No indicators extracted from events or findings.</p>"
+    parts = []
+    for label, rows in (("External", external), ("Internal / local", internal)):
+        if not rows:
+            continue
+        parts.append(f"<h3>{label} indicators ({len(rows)})</h3>")
+        parts.append(
+            "<table><tr><th>Type</th><th>Indicator (defanged)</th><th>Sources</th><th></th></tr>"
+        )
+        for row in rows[:IOC_TABLE_CAP]:
+            sources = row.get("sources") or []
+            shown = ", ".join(sources[:4])
+            extra = f" (+{len(sources) - 4} more)" if len(sources) > 4 else ""
+            defanged = row.get("defanged", row.get("value", ""))
+            parts.append(
+                f"<tr><td>{esc(row.get('type'))}</td>"
+                f"<td class='mono'>{esc(defanged)}</td>"
+                f"<td class='mono'>{esc(shown)}{esc(extra)}</td>"
+                f"<td><button type='button' class='copy-btn' "
+                f"data-copy=\"{esc(defanged)}\">copy</button></td></tr>"
+            )
+        parts.append("</table>")
+        if len(rows) > IOC_TABLE_CAP:
+            parts.append(
+                f"<p class='note'>Showing first {IOC_TABLE_CAP} of {len(rows)}; "
+                "full list in iocs.json.</p>"
+            )
+    return "".join(parts)
+
+
+def _not_analyzed_section(manifest, tl_stats) -> str:
+    parts = [
+        "<p class='note'>Absence of evidence in this archive is not evidence of "
+        "absence on the host. The following were not analyzed or not present:</p>",
+        "<ul class='tight'>",
+    ]
+    skipped = (manifest or {}).get("skipped") or []
+    if skipped:
+        parts.append(
+            f"<li>{len(skipped)} collected artifact(s) were skipped during parse "
+            "— see the appendix for the list.</li>"
+        )
+    undated = tl_stats.get("undated", 0)
+    if undated:
+        parts.append(
+            f"<li>{esc(undated)} event(s) have no usable timestamp and sit "
+            "outside time-ordered correlation.</li>"
+        )
+    for item in NOT_ANALYZED_STATIC:
+        parts.append(f"<li>{esc(item)}</li>")
+    parts.append("</ul>")
+    return "".join(parts)
+
+
 def build_report(out_dir: str | Path, *, report_name: str = "report.html") -> Path:
     out = Path(out_dir)
     findings = [Finding.from_dict(item) for item in _load_json(out / "findings.json", [])]
@@ -398,6 +593,9 @@ def build_report(out_dir: str | Path, *, report_name: str = "report.html") -> Pa
     verify = _load_json(out / "verify_report.json", None)
     tl_stats = _load_json(out / "timeline_stats.json", {})
     parse_stats = _load_json(out / "parse_stats.json", [])
+    risk = _load_json(out / "risk.json", {})
+    correlation = _load_json(out / "correlation.json", {})
+    iocs_data = _load_json(out / "iocs.json", {"external": [], "internal": []})
     context = collect_context(findings, out / "events.jsonl")
     rows = [_slim_row(record) for record in context["head"]]
 
@@ -470,6 +668,12 @@ def build_report(out_dir: str | Path, *, report_name: str = "report.html") -> Pa
             sections.append(f"<li><b>[{esc(finding.severity.value.upper())}]</b> {esc(finding.title)}</li>")
         sections.append("</ul>")
 
+    sections.append("<h2>Risk score</h2>")
+    sections.append(_risk_section(risk))
+
+    sections.append("<h2>Attack narrative</h2>")
+    sections.append(_narrative_section(correlation))
+
     sections.append(
         "<h2>Findings by severity</h2><div class='toolbar'><label>Severity <select id='f-sev'>"
         "<option value=''>all</option>"
@@ -508,11 +712,10 @@ def build_report(out_dir: str | Path, *, report_name: str = "report.html") -> Pa
     )
 
     sections.append("<h2>Indicators of compromise</h2>")
-    sections.append(
-        "<p class='note'>No dedicated IOC extractors are registered yet. IOC collection will be "
-        "populated by the network, web and filesystem parsers in a later step; until then, treat "
-        "source IPs named in SSH findings and paths in persistence findings as candidate IOCs.</p>"
-    )
+    sections.append(_ioc_section(iocs_data))
+
+    sections.append("<h2>What was not analyzed</h2>")
+    sections.append(_not_analyzed_section(manifest, tl_stats))
 
     sections.append("<h2>Appendix</h2>")
     if verify is not None:
