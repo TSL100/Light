@@ -12,13 +12,18 @@ from collections.abc import Iterable
 from ..schema import Event, Finding
 from . import (
     account_changes,
+    audit_exec,
+    kernel_module,
     ld_preload,
+    login_anomalies,
     masked_services,
+    package_install,
     ssh_bruteforce,
     ssh_keys,
     sshd_weakening,
     suspicious_history,
     tmp_persistence,
+    webshell,
 )
 
 DETECTOR_MODULES = (
@@ -30,6 +35,11 @@ DETECTOR_MODULES = (
     ssh_keys,
     masked_services,
     sshd_weakening,
+    webshell,
+    package_install,
+    audit_exec,
+    login_anomalies,
+    kernel_module,
 )
 
 RULE_INFO: dict[str, dict] = {}

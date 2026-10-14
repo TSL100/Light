@@ -434,6 +434,11 @@ class TestEndToEnd:
         "new_authorized_keys": 1,
         "masked_security_service": 1,
         "sshd_config_weakening": 1,
+        "webshell_and_web_attacks": 1,
+        "suspicious_package_install": 1,
+        "audit_suspicious_exec": 1,
+        "login_anomalies": 2,
+        "kernel_module_load": 1,
     }
 
     def test_infected_findings(self, generated, tmp_path):

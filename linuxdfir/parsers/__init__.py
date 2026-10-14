@@ -60,13 +60,19 @@ def _register(parsers: dict, module) -> None:
 
 PARSER_MODULES = (
     "auth_log",
+    "auditd",
     "bash_history",
     "cron",
+    "journald",
     "ld_preload",
+    "package_logs",
     "passwd_shadow_sudoers",
     "profile_scripts",
     "ssh",
+    "syslog_kern",
     "systemd_units",
+    "web_logs",
+    "wtmp_btmp_lastlog",
 )
 
 

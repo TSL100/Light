@@ -278,7 +278,8 @@ def build_infected(root, rng):
         "var/log/kern.log",
         "Dec 31 23:59:00 web01 kernel: [  123.456789] EXT4-fs (sda1): mounted filesystem\n"
         "Jan  2 03:14:11 web01 kernel: [184211.200011] audit: type=1326 "
-        "audit(1767318851.200:60): auid=0 ses=3 op=connect\n",
+        "audit(1767318851.200:60): auid=0 ses=3 op=connect\n"
+        "Jan  2 03:21:10 web01 kernel: [184270.654321] hid_x: loading out-of-tree module taints kernel.\n",
     )
     write_bytes(
         root,

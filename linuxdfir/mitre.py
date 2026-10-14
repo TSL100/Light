@@ -48,6 +48,13 @@ TECHNIQUES = {
     "T1505.003": {"name": "Web Shell", "tactics": ["TA0003"]},
     "T1546": {"name": "Event Triggered Execution", "tactics": ["TA0003", "TA0004"]},
     "T1546.004": {"name": "Unix Shell Configuration Modification", "tactics": ["TA0003", "TA0004"]},
+    "T1190": {"name": "Exploit Public-Facing Application", "tactics": ["TA0001"]},
+    "T1588": {"name": "Obtain Capabilities", "tactics": ["TA0042"]},
+    "T1588.002": {"name": "Tool", "tactics": ["TA0042"]},
+    "T1003": {"name": "OS Credential Dumping", "tactics": ["TA0006"]},
+    "T1003.008": {"name": "/etc/passwd and /etc/shadow", "tactics": ["TA0006"]},
+    "T1547": {"name": "Boot or Logon Autostart Execution", "tactics": ["TA0003", "TA0004"]},
+    "T1547.006": {"name": "Kernel Modules and Extensions", "tactics": ["TA0003", "TA0004"]},
 }
 
 
