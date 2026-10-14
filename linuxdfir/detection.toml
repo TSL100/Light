@@ -20,3 +20,71 @@ window_minutes = 10
 # attack chain. netcat-traditional is deliberately NOT listed: it is the
 # classic attacker choice and must always raise a finding.
 packages = ["netcat-openbsd"]
+
+[timestomp]
+# ctime more than threshold_days after mtime counts as a timestomp
+# indicator. Thresholds below ~1 day produce noise from package installs.
+threshold_days = 1
+
+[suid]
+# SUID/SGID binaries expected on a normal host. Anything outside this
+# list raises unusual_suid; binaries in world-writable paths are HIGH
+# even when the name looks familiar.
+allowlist = [
+    "/usr/bin/sudo", "/usr/bin/su", "/bin/su",
+    "/usr/bin/passwd", "/bin/passwd",
+    "/usr/bin/chsh", "/usr/bin/chfn", "/usr/bin/newgrp", "/usr/bin/gpasswd",
+    "/usr/bin/pkexec",
+    "/usr/bin/mount", "/bin/mount", "/usr/bin/umount", "/bin/umount",
+    "/usr/bin/fusermount", "/usr/bin/fusermount3",
+    "/usr/bin/ntfs-3g",
+    "/usr/bin/at", "/usr/bin/crontab",
+    "/usr/bin/ssh-agent", "/usr/bin/ssh-keysign",
+    "/usr/bin/ping", "/bin/ping", "/usr/bin/traceroute",
+    "/usr/sbin/pppd",
+    "/usr/lib/dbus-1.0/dbus-daemon-launch-helper",
+    "/usr/libexec/dbus-daemon-launch-helper",
+    "/usr/lib/openssh/ssh-keysign",
+]
+writable_paths = ["/tmp/", "/var/tmp/", "/dev/shm/", "/home/", "/root/"]
+
+[scratch_exec]
+# World-writable scratch directories where an executable file (exec bit,
+# hidden path or ELF content) is attacker tooling until proven otherwise.
+paths = ["/tmp/", "/var/tmp/", "/dev/shm/"]
+# Benign empty placeholder files (distro install markers) never alert.
+allowlist = [".placeholder"]
+
+[recent_changes]
+# Recently modified files under these sensitive locations raise
+# recent_changes_in_sensitive_paths; severity depends on the path class.
+# Package-manager files inside cron dirs are allowlisted by name.
+paths = [
+    "/etc/cron.d/", "/etc/cron.daily/", "/etc/cron.hourly/",
+    "/etc/cron.weekly/", "/etc/cron.monthly/",
+    "/etc/sudoers.d/", "/etc/ld.so.preload",
+    "/etc/systemd/system/", "/etc/profile.d/",
+]
+allowlist_names = ["apt-compat", "logrotate", ".placeholder", "hardening.sh", "man-db.cron"]
+
+[processes]
+# Ports a healthy listener may bind. Anything else is an unexpected
+# listener (suspicious_processes).
+allowed_ports = [22, 80, 443, 53, 25, 110, 143, 993, 995, 3306, 5432, 6379, 11211]
+# Substring patterns (case-insensitive) for cryptominer processes.
+miner_patterns = ["xmrig", "stratum+tcp", "stratum+ssl", "minerd", "cpuminer", "srigger"]
+# Substring patterns marking reverse-shell command lines.
+reverse_shell_patterns = [
+    "nc -e ", "ncat -e ", "socat EXEC", "socat exec",
+    ">&/dev/tcp", "> /dev/tcp", "bash -i ", "sh -i ",
+]
+
+[containers]
+# Images treated as routine workloads. Anything else raises
+# suspicious_containers (unknown image); privileged/docker.sock hints
+# in the row text escalate to HIGH.
+allowlist_images = [
+    "nginx", "httpd", "redis", "memcached",
+    "postgres", "mysql", "mariadb", "mongo",
+    "alpine", "ubuntu", "debian", "busybox",
+]

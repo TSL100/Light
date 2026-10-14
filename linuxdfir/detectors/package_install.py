@@ -22,6 +22,8 @@ from ..schema import Event, Finding, Ref, Severity, make_finding_id
 
 RULE = "suspicious_package_install"
 
+USES_CONFIG = True
+
 RULE_INFO = {
     RULE: {
         "why": (

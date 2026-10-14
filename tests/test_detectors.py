@@ -439,6 +439,10 @@ class TestEndToEnd:
         "audit_suspicious_exec": 1,
         "login_anomalies": 2,
         "kernel_module_load": 1,
+        "timestomp_detection": 1,
+        "executables_in_dev_shm": 1,
+        "suspicious_processes": 3,
+        "recent_changes_in_sensitive_paths": 1,
     }
 
     def test_infected_findings(self, generated, tmp_path):

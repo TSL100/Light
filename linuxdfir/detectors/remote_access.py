@@ -13,7 +13,7 @@ import re
 from collections.abc import Iterable
 
 from ..parsers.cron import parse_cron_message
-from ..parsers.live_processes import parse_process_message
+from ..parsers.live_state import parse_process_message
 from ..parsers.systemd_units import parse_exec_message
 from ..schema import Event, Finding, Ref, Severity, make_finding_id
 

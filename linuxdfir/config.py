@@ -20,6 +20,54 @@ FALLBACK_DEFAULTS: dict = {
     },
     "bulk_batch": {"threshold": 50, "window_minutes": 10},
     "default_image_packages": {"packages": ["netcat-openbsd"]},
+    "timestomp": {"threshold_days": 1},
+    "suid": {
+        "allowlist": [
+            "/usr/bin/sudo", "/usr/bin/su", "/bin/su",
+            "/usr/bin/passwd", "/bin/passwd",
+            "/usr/bin/chsh", "/usr/bin/chfn", "/usr/bin/newgrp", "/usr/bin/gpasswd",
+            "/usr/bin/pkexec",
+            "/usr/bin/mount", "/bin/mount", "/usr/bin/umount", "/bin/umount",
+            "/usr/bin/fusermount", "/usr/bin/fusermount3",
+            "/usr/bin/ntfs-3g",
+            "/usr/bin/at", "/usr/bin/crontab",
+            "/usr/bin/ssh-agent", "/usr/bin/ssh-keysign",
+            "/usr/bin/ping", "/bin/ping", "/usr/bin/traceroute",
+            "/usr/sbin/pppd",
+            "/usr/lib/dbus-1.0/dbus-daemon-launch-helper",
+            "/usr/libexec/dbus-daemon-launch-helper",
+            "/usr/lib/openssh/ssh-keysign",
+        ],
+        "writable_paths": ["/tmp/", "/var/tmp/", "/dev/shm/", "/home/", "/root/"],
+    },
+    "scratch_exec": {
+        "paths": ["/tmp/", "/var/tmp/", "/dev/shm/"],
+        "allowlist": [".placeholder"],
+    },
+    "recent_changes": {
+        "paths": [
+            "/etc/cron.d/", "/etc/cron.daily/", "/etc/cron.hourly/",
+            "/etc/cron.weekly/", "/etc/cron.monthly/",
+            "/etc/sudoers.d/", "/etc/ld.so.preload",
+            "/etc/systemd/system/", "/etc/profile.d/",
+        ],
+        "allowlist_names": ["apt-compat", "logrotate", ".placeholder", "hardening.sh", "man-db.cron"],
+    },
+    "processes": {
+        "allowed_ports": [22, 80, 443, 53, 25, 110, 143, 993, 995, 3306, 5432, 6379, 11211],
+        "miner_patterns": ["xmrig", "stratum+tcp", "stratum+ssl", "minerd", "cpuminer", "srigger"],
+        "reverse_shell_patterns": [
+            "nc -e ", "ncat -e ", "socat EXEC", "socat exec",
+            ">&/dev/tcp", "> /dev/tcp", "bash -i ", "sh -i ",
+        ],
+    },
+    "containers": {
+        "allowlist_images": [
+            "nginx", "httpd", "redis", "memcached",
+            "postgres", "mysql", "mariadb", "mongo",
+            "alpine", "ubuntu", "debian", "busybox",
+        ],
+    },
 }
 
 

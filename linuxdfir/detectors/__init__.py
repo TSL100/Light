@@ -13,17 +13,23 @@ from ..schema import Event, Finding
 from . import (
     account_changes,
     audit_exec,
+    executables_in_dev_shm,
     kernel_module,
     ld_preload,
     login_anomalies,
     masked_services,
     package_install,
+    recent_changes_in_sensitive_paths,
     remote_access,
     ssh_bruteforce,
     ssh_keys,
     sshd_weakening,
+    suspicious_containers,
     suspicious_history,
+    suspicious_processes,
+    timestomp_detection,
     tmp_persistence,
+    unusual_suid,
     webshell,
 )
 
@@ -42,6 +48,12 @@ DETECTOR_MODULES = (
     login_anomalies,
     kernel_module,
     remote_access,
+    timestomp_detection,
+    executables_in_dev_shm,
+    suspicious_processes,
+    unusual_suid,
+    recent_changes_in_sensitive_paths,
+    suspicious_containers,
 )
 
 RULE_INFO: dict[str, dict] = {}
@@ -53,7 +65,7 @@ def detect_all(events: Iterable[Event], config: dict | None = None) -> list[Find
     materialized = list(events)
     findings: list[Finding] = []
     for module in DETECTOR_MODULES:
-        if module is package_install:
+        if getattr(module, "USES_CONFIG", False):
             findings.extend(module.detect(materialized, config=config))
         else:
             findings.extend(module.detect(materialized))
