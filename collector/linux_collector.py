@@ -621,6 +621,7 @@ class Collector(object):
         self.live = []
         self.triage = []
         self.skipped = []
+        self._collected = {}
         self.phases = []
         self.error_log_count = 0
         self.error_log_cap = 1000
@@ -713,6 +714,10 @@ class Collector(object):
         }
 
     def collect_path(self, logical, category):
+        existing = self._collected.get(logical)
+        if existing is not None:
+            self.log("INFO", "already collected %s, skipping duplicate" % logical)
+            return existing
         real = self._real(logical)
         try:
             st_link = _lstat(real)
@@ -738,6 +743,7 @@ class Collector(object):
                 rec["masked"] = True
                 rec["hashable"] = False
                 self.files.append(rec)
+                self._collected[logical] = rec
                 self.log("INFO", "recorded masked unit %s -> /dev/null (metadata only)" % logical)
                 return rec
             resolved = os.path.normpath(os.path.join(os.path.dirname(real), link_target))
@@ -758,6 +764,7 @@ class Collector(object):
                 rec.update(self._stat_meta(st_link))
                 rec["type"] = "symlink"
                 self.files.append(rec)
+                self._collected[logical] = rec
                 self.log("INFO", "recorded directory symlink %s -> %s (metadata only)" % (logical, link_target))
                 return rec
             if not os.path.lexists(resolved):
@@ -810,6 +817,7 @@ class Collector(object):
             rec["link_mode"] = oct(statmod.S_IMODE(st_link.st_mode))
             rec["link_mtime"] = _utc_iso(st_link.st_mtime)
         self.files.append(rec)
+        self._collected[logical] = rec
         self.log("INFO", "collected %s (%d bytes)" % (logical, size))
         return rec
 

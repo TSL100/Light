@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
+import tomllib
+from pathlib import Path
+
 from linuxdfir.config import DEFAULT_CONFIG_PATH, load_config
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PKG_DIR = REPO_ROOT / "linuxdfir"
 
 
 def test_shipped_defaults():
@@ -35,3 +42,25 @@ def test_missing_file_raises(tmp_path):
 
     with pytest.raises(OSError):
         load_config(tmp_path / "does-not-exist.toml")
+
+
+def test_pyproject_declares_package_data():
+    with open(REPO_ROOT / "pyproject.toml", "rb") as handle:
+        project = tomllib.load(handle)
+    shipped = project["tool"]["setuptools"]["package-data"]["linuxdfir"]
+    assert "detection.toml" in shipped
+
+
+def test_config_loads_from_installed_package_path(tmp_path):
+    site = tmp_path / "site-packages" / "linuxdfir"
+    site.mkdir(parents=True)
+    for name in ("__init__.py", "config.py", "detection.toml"):
+        (site / name).write_bytes((PKG_DIR / name).read_bytes())
+    spec = importlib.util.spec_from_file_location("installed_linuxdfir.config", site / "config.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.DEFAULT_CONFIG_PATH.parent == site
+    cfg = module.load_config(None)
+    assert cfg["bulk_batch"]["threshold"] == 50
+    assert "netcat-openbsd" in cfg["default_image_packages"]["packages"]

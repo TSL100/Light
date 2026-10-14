@@ -21,9 +21,13 @@ linuxdfir = "linuxdfir.cli:main"
 [tool.setuptools.packages.find]
 include = ["linuxdfir*"]
 
+[tool.setuptools.package-data]
+linuxdfir = ["detection.toml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not slow'"
+markers = ["slow: long-running stress tests, deselected by default (select with -m slow)"]
 
 [tool.ruff]
 line-length = 120

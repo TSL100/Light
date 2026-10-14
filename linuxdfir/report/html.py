@@ -447,7 +447,13 @@ def build_report(out_dir: str | Path, *, report_name: str = "report.html") -> Pa
         f"Archive SHA256 <span class='mono'><b>{esc(archive_sha)}</b></span></div></header>"
     )
     sections.append(integrity_banner)
-    sections.append("<h2>Executive summary</h2><div class='grid'>")
+    sections.append("<h2>Executive summary</h2>")
+    real_count = sum(count for sev, count in by_sev.items() if sev != Severity.INFO.value)
+    info_count = by_sev.get(Severity.INFO.value, 0)
+    sections.append(
+        f"<div class='meta'><b>{real_count} actionable findings</b> + "
+        f"{info_count} informational notes</div><div class='grid'>"
+    )
     for sev in SEVERITY_ORDER:
         sections.append(
             f"<div class='card'><span class='sev sev-{sev.value}'>{esc(sev.value.upper())}</span>"

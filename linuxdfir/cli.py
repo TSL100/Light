@@ -13,7 +13,7 @@ from .detectors import detect_all
 from .ingest import Evidence, EvidenceError, UnsafeArchiveError
 from .parsers import available_parsers, iter_members, skipped_members
 from .report import csv_report, html, json_report
-from .schema import Event, Finding
+from .schema import Event, Finding, Severity
 from .timeline import Timeline
 
 EXIT_OK = 0
@@ -299,13 +299,16 @@ def cmd_detect(args: argparse.Namespace) -> int:
         print(f"detect failed: bad config: {exc}", file=sys.stderr)
         return EXIT_ERROR
     findings = detect_all(events, config=config)
+    info_count = sum(1 for finding in findings if finding.severity == Severity.INFO)
+    real_count = len(findings) - info_count
+    headline = f"{real_count} actionable + {info_count} info"
     if args.out:
         outdir = Path(args.out)
         outdir.mkdir(parents=True, exist_ok=True)
         json_report.write_findings(findings, outdir / "findings.json")
-        print(f"findings         : {len(findings)} -> {outdir / 'findings.json'}")
+        print(f"findings         : {headline} -> {outdir / 'findings.json'}")
     else:
-        print(f"findings         : {len(findings)}")
+        print(f"findings         : {headline}")
     if skipped:
         print(f"skipped lines    : {skipped}")
     for finding in sorted(findings, key=lambda f: (f.severity.value, f.rule)):

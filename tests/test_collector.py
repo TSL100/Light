@@ -486,3 +486,28 @@ def test_masked_systemd_unit_without_symlink_privilege(mod, fake_root, tmp_path,
     outdir = tmp_path / "out"
     archive, _ = run_collector(mod, fake_root, outdir)
     assert_masked_unit_record(read_manifest(archive), archive)
+
+
+def test_shared_home_collected_once(mod, tmp_path):
+    root = tmp_path / "rootfs"
+    root.mkdir()
+    write_file(
+        root,
+        "etc/passwd",
+        "root:x:0:0:root:/root:/bin/bash\nsysbackup:x:0:0:System Backup:/root:/bin/bash\n",
+    )
+    write_file(root, "root/.bash_history", "id\n")
+    write_file(root, "root/.ssh/authorized_keys", "ssh-ed25519 AAAA root@host\n")
+    outdir = tmp_path / "out"
+    archive, _ = run_collector(mod, root, outdir)
+    manifest = read_manifest(archive)
+    ok_records = [
+        rec for rec in manifest["files"] if rec.get("status") == "ok" and rec.get("archive_path")
+    ]
+    assert len(ok_records) == len({rec["archive_path"] for rec in ok_records})
+    assert sum(1 for rec in ok_records if rec["original_path"] == "/root/.bash_history") == 1
+    assert sum(1 for rec in ok_records if rec["original_path"] == "/root/.ssh/authorized_keys") == 1
+    with tarfile.open(archive, "r:gz") as tar:
+        names = tar.getnames()
+    assert names.count("evidence/root/.bash_history") == 1
+    assert names.count("evidence/root/.ssh/authorized_keys") == 1

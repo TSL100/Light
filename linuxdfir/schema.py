@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from fnmatch import fnmatch
+from fnmatch import translate
+from functools import lru_cache
+from os.path import normcase
+
+from .redact import redact_secrets
 
 TIMESTAMP_QUALITIES = ("exact", "inferred_year", "tz_assumed", "none")
 
@@ -93,6 +98,11 @@ class Event:
             raise ValueError(f"confidence out of range: {self.confidence!r}")
         if self.repeat_count < 1:
             raise ValueError(f"repeat_count must be >= 1: {self.repeat_count!r}")
+        # Central secret redaction: every parser benefits, and no downstream
+        # artifact (events.jsonl, timeline.db/csv, findings, reports) can
+        # carry a password, token or hash. Idempotent across from_dict().
+        self.message = redact_secrets(self.message)
+        self.raw = redact_secrets(self.raw)
 
     def to_dict(self) -> dict:
         return {
@@ -357,16 +367,45 @@ NON_EVENT_SOURCES: frozenset = frozenset(
     }
 )
 
+# Precompiled artifact matchers: fnmatch() recompiles every pattern and
+# issues a normcase syscall per call, which dominated parse time
+# (150k+ calls per run). Patterns are constants, so compile once and
+# normcase each candidate path once per lookup. Semantics identical to
+# fnmatch on both cases (normcase preserves Windows case-insensitivity).
+_COMPILED_PATTERNS: tuple = tuple(
+    (name, tuple(re.compile(translate(normcase(pattern))).match for pattern in spec.patterns))
+    for name, spec in ARTIFACTS.items()
+)
+
+
+def _compiled_match(name: str, candidates: list[str]) -> bool:
+    for artifact_name, matchers in _COMPILED_PATTERNS:
+        if artifact_name != name:
+            continue
+        for match in matchers:
+            for candidate in candidates:
+                if match(normcase(candidate)):
+                    return True
+    return False
+
 
 def match_artifact(name: str, *, original_path: str | None = None, archive_path: str | None = None) -> bool:
-    spec = ARTIFACTS[name]
+    if name not in ARTIFACTS:
+        raise KeyError(name)
     candidates = [path for path in (original_path, archive_path) if path]
-    return any(fnmatch(candidate, pattern) for candidate in candidates for pattern in spec.patterns)
+    return _compiled_match(name, candidates)
+
+
+@lru_cache(maxsize=4096)
+def _cached_artifacts(original_path: str | None, archive_path: str | None) -> tuple:
+    names = []
+    candidates = [path for path in (original_path, archive_path) if path]
+    lowered = [normcase(path) for path in candidates]
+    for artifact_name, matchers in _COMPILED_PATTERNS:
+        if any(match(candidate) for match in matchers for candidate in lowered):
+            names.append(artifact_name)
+    return tuple(names)
 
 
 def artifacts_for_path(*, original_path: str | None = None, archive_path: str | None = None) -> list[str]:
-    return [
-        name
-        for name in ARTIFACTS
-        if match_artifact(name, original_path=original_path, archive_path=archive_path)
-    ]
+    return list(_cached_artifacts(original_path, archive_path))

@@ -2,6 +2,8 @@ import hashlib
 import importlib.util
 import io
 import json
+import platform
+import socket
 import sys
 import tarfile
 from pathlib import Path
@@ -21,6 +23,19 @@ def load_generate():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(autouse=True)
+def _fast_host_facts(monkeypatch):
+    """Stub slow host-fact syscalls (reverse DNS, WMI platform probes).
+
+    The collector queries these once per run; without reverse DNS each
+    call costs ~1s, which the suite would otherwise pay ~25 times. No
+    test asserts fqdn/platform values (evidence identity comes from
+    etc/hostname), so stubbing is behavior-neutral for the suite.
+    """
+    monkeypatch.setattr(socket, "getfqdn", lambda *args, **kwargs: "testhost")
+    monkeypatch.setattr(platform, "platform", lambda *args, **kwargs: "test-platform")
 
 
 @pytest.fixture(scope="session")

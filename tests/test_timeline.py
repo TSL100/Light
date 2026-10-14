@@ -233,6 +233,7 @@ def _big_stream(total=500000):
             yield event
 
 
+@pytest.mark.slow
 def test_large_stream_stays_bounded(tmp_path):
     tracemalloc.start()
     started = time.perf_counter()

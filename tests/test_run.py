@@ -66,3 +66,29 @@ def test_term_log_skipped(tmp_path):
     assert all(entry["status"] == "not an event source" for entry in stats["skipped"])
     assert stats["per_parser"]["package_logs"]["unparsed"] == 0
     assert stats["per_parser"]["package_logs"]["events"] == 1
+
+
+def test_no_hidden_dedup_or_dupes(generated, tmp_path):
+    for profile in ("infected", "clean"):
+        archive = generated["results"][profile]["archive"]
+        out = tmp_path / f"parsed-{profile}"
+        assert cli.main(["parse", str(archive), "-o", str(out)]) == 0
+        stats = json.loads((out / "parse_stats.json").read_text(encoding="utf-8"))
+        per_parser_total = sum(entry.get("events", 0) for entry in stats["members"])
+        tl_stats = json.loads((out / "timeline_stats.json").read_text(encoding="utf-8"))
+        assert per_parser_total == tl_stats["total"] == tl_stats["jsonl_events"], (
+            f"{profile}: per-parser events ({per_parser_total}) != timeline total ({tl_stats['total']})"
+        )
+        seen = set()
+        for line in (out / "events.jsonl").read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            key = (
+                record["parser"],
+                record["evidence_path"],
+                str(record.get("line_or_offset")),
+                record["message"],
+            )
+            assert key not in seen, f"{profile}: duplicate event {key}"
+            seen.add(key)
