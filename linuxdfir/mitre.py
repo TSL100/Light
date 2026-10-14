@@ -55,6 +55,8 @@ TECHNIQUES = {
     "T1003.008": {"name": "/etc/passwd and /etc/shadow", "tactics": ["TA0006"]},
     "T1547": {"name": "Boot or Logon Autostart Execution", "tactics": ["TA0003", "TA0004"]},
     "T1547.006": {"name": "Kernel Modules and Extensions", "tactics": ["TA0003", "TA0004"]},
+    "T1572": {"name": "Protocol Tunneling", "tactics": ["TA0011"]},
+    "T1090": {"name": "Proxy", "tactics": ["TA0011"]},
 }
 
 

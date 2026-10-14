@@ -147,8 +147,9 @@ def test_run_clean_has_no_high_or_critical(generated, tmp_path):
     assert cli.main(["run", str(archive), "-o", str(out)]) == 0
     findings = json.loads((out / "findings.json").read_text(encoding="utf-8"))
     assert all(f["severity"] in ("info", "low", "medium") for f in findings)
+    assert [f["rule"] for f in findings] == ["sshd_config_weakening"]
     page = (out / "report.html").read_text(encoding="utf-8")
-    assert "No findings." in page
+    assert "Weak sshd setting" in page
     assert '<span class="sev sev-critical">' not in page
     assert '<span class="sev sev-high">' not in page
 

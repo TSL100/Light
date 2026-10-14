@@ -18,6 +18,7 @@ from . import (
     login_anomalies,
     masked_services,
     package_install,
+    remote_access,
     ssh_bruteforce,
     ssh_keys,
     sshd_weakening,
@@ -40,6 +41,7 @@ DETECTOR_MODULES = (
     audit_exec,
     login_anomalies,
     kernel_module,
+    remote_access,
 )
 
 RULE_INFO: dict[str, dict] = {}
@@ -47,9 +49,12 @@ for _module in DETECTOR_MODULES:
     RULE_INFO.update(getattr(_module, "RULE_INFO", {}))
 
 
-def detect_all(events: Iterable[Event]) -> list[Finding]:
+def detect_all(events: Iterable[Event], config: dict | None = None) -> list[Finding]:
     materialized = list(events)
     findings: list[Finding] = []
     for module in DETECTOR_MODULES:
-        findings.extend(module.detect(materialized))
+        if module is package_install:
+            findings.extend(module.detect(materialized, config=config))
+        else:
+            findings.extend(module.detect(materialized))
     return findings

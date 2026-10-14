@@ -294,13 +294,17 @@ ARTIFACTS: dict[str, ArtifactSpec] = {
         (
             "/var/log/dpkg.log*",
             "/var/log/apt/history.log*",
-            "/var/log/apt/term.log*",
             "/var/log/yum.log*",
             "/var/log/yum/*",
             "/var/log/dnf*",
             "/var/log/dnf/*",
         ),
         "package manager history",
+    ),
+    "apt_term_log": ArtifactSpec(
+        "apt_term_log",
+        ("/var/log/apt/term.log*",),
+        "apt terminal transcript (free-form output, not an event source)",
     ),
     "syslog": ArtifactSpec("syslog", ("/var/log/syslog*",), "system log"),
     "kern_log": ArtifactSpec("kern_log", ("/var/log/kern.log*",), "kernel log"),
@@ -343,6 +347,15 @@ ARTIFACTS: dict[str, ArtifactSpec] = {
     "live_crontab": ArtifactSpec("live_crontab", ("live/crontab_*.txt",), "per-user crontab snapshot"),
     "live_journal": ArtifactSpec("live_journal", ("live/journalctl_export.txt",), "journal export"),
 }
+
+NON_EVENT_SOURCES: frozenset = frozenset(
+    {
+        # Collected artifacts that are free-form output, not event logs.
+        # The parse pipeline records these as skipped ("not an event source")
+        # instead of emitting unparsed events for them.
+        "apt_term_log",
+    }
+)
 
 
 def match_artifact(name: str, *, original_path: str | None = None, archive_path: str | None = None) -> bool:

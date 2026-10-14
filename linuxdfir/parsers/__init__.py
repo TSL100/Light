@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterator
 
 from ..ingest import Evidence
-from ..schema import Event, artifacts_for_path
+from ..schema import NON_EVENT_SOURCES, Event, artifacts_for_path
 
 HOME_USER_RE = re.compile(r"^/home/([^/]+)/")
 
@@ -54,6 +54,16 @@ def iter_members(evidence: Evidence, consumes: list[str]) -> Iterator[str]:
     yield from matched
 
 
+def skipped_members(evidence: Evidence) -> list[str]:
+    """Archive members that are collected but not event sources (never parsed)."""
+    seen: list[str] = []
+    for key in sorted(NON_EVENT_SOURCES):
+        for member in iter_members(evidence, [key]):
+            if member not in seen:
+                seen.append(member)
+    return seen
+
+
 def _register(parsers: dict, module) -> None:
     parsers[module.PARSER_NAME] = module
 
@@ -65,6 +75,7 @@ PARSER_MODULES = (
     "cron",
     "journald",
     "ld_preload",
+    "live_processes",
     "package_logs",
     "passwd_shadow_sudoers",
     "profile_scripts",

@@ -12,6 +12,7 @@ from linuxdfir.ingest import Evidence
 from linuxdfir.parsers import (
     auditd,
     journald,
+    live_processes,
     package_logs,
     syslog_kern,
     web_logs,
@@ -367,3 +368,32 @@ class TestWtmpBtmpLastlog:
         events = _parse(wtmp_btmp_lastlog, tmp_path, {"/var/log/lastlog": rec},
                         "evidence/var/log/lastlog")
         assert len(events) == 1
+
+
+# ----------------------------------------------------------- live_processes
+
+
+class TestLiveProcesses:
+    PS_BLOB = (
+        b"USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND\n"
+        b"root 1 0.0 0.1 166484 11832 ? Ss Jan01 0:04 /sbin/init\n"
+        b"root 4152 0.0 0.0 11512 3400 pts/1 Ss 03:12 0:00 /tmp/.x/x --daemon\n"
+    )
+
+    def test_basic(self, tmp_path):
+        events = _parse(live_processes, tmp_path, {"live/ps_auxf.txt": self.PS_BLOB},
+                        "evidence/live/ps_auxf.txt")
+        assert len(events) == 2
+        assert events[0].event_type == "process"
+        assert events[0].user == "root"
+        assert events[0].timestamp_utc is None
+        info = live_processes.parse_process_message(events[1].message)
+        assert info == {"user": "root", "pid": 4152, "command": "/tmp/.x/x --daemon"}
+
+    def test_malformed(self, tmp_path):
+        events = _parse(live_processes, tmp_path, {"live/ps_auxf.txt": b"short line\n"},
+                        "evidence/live/ps_auxf.txt")
+        assert events[0].event_type == "unparsed"
+
+    def test_helper_rejects(self):
+        assert live_processes.parse_process_message("nope") is None

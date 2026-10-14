@@ -1,0 +1,22 @@
+# LinuxDFIR detection tuning. Copy this file and pass it with
+# `linuxdfir detect --config my.toml` (or `run --config`) to override
+# any section without touching code. Lists replace the defaults wholesale.
+
+[package_tools]
+# Attacker tool families flagged on install/update. Each entry matches as
+# a dash/underscore/dot-separated name component (netcat hits
+# netcat-traditional and netcat-openbsd alike).
+tools = ["nmap", "netcat", "hydra", "john", "masscan", "tcpdump", "socat"]
+
+[bulk_batch]
+# Install/update records at or above this count inside window_minutes are
+# treated as base-image provisioning, not attacker activity.
+threshold = 50
+window_minutes = 10
+
+[default_image_packages]
+# Exact package names (without :arch) that ship in default cloud/WSL
+# images. Suppressed to INFO unless explicitly requested or part of an
+# attack chain. netcat-traditional is deliberately NOT listed: it is the
+# classic attacker choice and must always raise a finding.
+packages = ["netcat-openbsd"]

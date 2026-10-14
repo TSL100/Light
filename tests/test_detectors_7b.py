@@ -3,15 +3,19 @@ audit_exec, login_anomalies, kernel_module."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+from conftest import make_mini_evidence
 
 from linuxdfir.detectors import (
     audit_exec,
     kernel_module,
     login_anomalies,
     package_install,
+    remote_access,
     webshell,
 )
+from linuxdfir.ingest import Evidence
 from linuxdfir.schema import Event, Severity
 
 
@@ -108,6 +112,103 @@ class TestPackageInstall:
             evidence_path="/var/log/dpkg.log",
             message="package remove nmap:amd64 7.93",
         )
+        assert package_install.detect([e]) == []
+
+    def test_explicit_apt_request_medium(self):
+        e = _event(
+            event_type="package_install",
+            evidence_path="/var/log/apt/history.log",
+            message="package install netcat-traditional:amd64 1.10 via apt install netcat-traditional",
+        )
+        findings = package_install.detect([e])
+        assert findings and findings[0].severity == Severity.MEDIUM
+        assert "explicitly requested" in findings[0].description
+
+    def test_automatic_dependency_low(self):
+        e = _event(
+            event_type="package_install",
+            evidence_path="/var/log/apt/history.log",
+            message="package install netcat-traditional:amd64 1.10 via apt install my-meta-package",
+        )
+        findings = package_install.detect([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.LOW
+        assert "automatic dependency" in findings[0].description
+
+    def test_allowlisted_image_package_info(self):
+        e = _event(
+            event_type="package_install",
+            evidence_path="/var/log/dpkg.log",
+            message="package install netcat-openbsd:amd64 1.219-1",
+        )
+        findings = package_install.detect([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.INFO
+        assert "default image" in findings[0].description
+
+    def test_explicit_beats_allowlist(self):
+        e = _event(
+            event_type="package_install",
+            evidence_path="/var/log/apt/history.log",
+            message="package install netcat-openbsd:amd64 1.219-1 via apt install netcat-openbsd",
+        )
+        findings = package_install.detect([e])
+        assert findings and findings[0].severity == Severity.MEDIUM
+
+    def test_bulk_batch_info(self, tmp_path):
+        from linuxdfir.parsers import package_logs
+
+        lines = ["2026-01-02 03:20:11 install netcat-openbsd:amd64 1.219-1 1.219-1"]
+        lines += [f"2026-01-02 03:2{i // 60}:{i % 60:02d} install base-pkg-{i}:amd64 1.0 1.0" for i in range(54)]
+        root = make_mini_evidence(tmp_path / "mini", files={"/var/log/dpkg.log": "\n".join(lines).encode()})
+        with Evidence.open(root) as evidence:
+            events = list(package_logs.parse_member(evidence, "evidence/var/log/dpkg.log"))
+        assert len(events) == 55
+        findings = package_install.detect(events)
+        assert findings, "bulk batch must still be visible as INFO"
+        assert all(f.severity == Severity.INFO for f in findings)
+        assert not [f for f in findings if f.severity in (Severity.MEDIUM, Severity.HIGH)]
+        assert "bulk batch of 55" in findings[0].description
+
+    def test_custom_config_threshold(self, tmp_path):
+        from linuxdfir.config import load_config
+
+        custom = tmp_path / "custom.toml"
+        custom.write_text("[bulk_batch]\nthreshold = 5\n", encoding="utf-8")
+        base = datetime(2026, 1, 2, 1, 20, 11, tzinfo=UTC)
+        events = [
+            _event(
+                event_type="package_install",
+                evidence_path="/var/log/dpkg.log",
+                timestamp_utc=base + timedelta(seconds=i * 30),
+                message=f"package install bulk-pkg-{i}:amd64 1.0",
+            )
+            for i in range(6)
+        ]
+        events.append(
+            _event(
+                event_type="package_install",
+                evidence_path="/var/log/dpkg.log",
+                timestamp_utc=base,
+                message="package install nmap:amd64 7.93",
+            )
+        )
+        assert package_install.detect(events)[0].severity == Severity.MEDIUM
+        tuned = package_install.detect(events, config=load_config(custom))
+        assert tuned and tuned[0].severity == Severity.INFO
+
+    def test_custom_tool_list(self, tmp_path):
+        from linuxdfir.config import load_config
+
+        custom = tmp_path / "custom.toml"
+        custom.write_text('[package_tools]\ntools = ["frobnicate"]\n', encoding="utf-8")
+        cfg = load_config(custom)
+        e = _event(
+            event_type="package_install",
+            evidence_path="/var/log/dpkg.log",
+            message="package install frobnicate:amd64 1.0",
+        )
+        assert package_install.detect([e], config=cfg)
         assert package_install.detect([e]) == []
 
 
@@ -239,3 +340,101 @@ class TestKernelModule:
             message="kernel module tls: loaded during boot",
         )
         assert kernel_module.detect([e]) == []
+
+
+# ----------------------------------------------------------- remote_access
+
+
+class TestRemoteAccess:
+    def test_frp_unit_low(self):
+        e = _event(
+            event_type="systemd_exec",
+            user="root",
+            evidence_path="/etc/systemd/system/frpc.service",
+            message="ExecStart=/usr/bin/frpc -c /etc/frpc.ini (user=root)",
+        )
+        findings = remote_access.detect([e])
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.LOW
+        assert "T1572" in findings[0].mitre_ids
+        assert "often legitimate" in findings[0].description
+
+    def test_ngrok_process_low(self):
+        e = _event(
+            event_type="process",
+            user="alice",
+            evidence_path="live/ps_auxf.txt",
+            message="process alice pid=4444: ./ngrok http 80",
+        )
+        findings = remote_access.detect([e])
+        assert findings and findings[0].rule == "remote_access_tooling"
+
+    def test_chisel_cron_low(self):
+        e = _event(
+            event_type="cron_job",
+            user="root",
+            evidence_path="/etc/cron.d/tun",
+            message="cron [* * * * *] root: /usr/local/bin/chisel client example.com:443 R:8080:localhost:80",
+        )
+        findings = remote_access.detect([e])
+        assert findings and findings[0].severity == Severity.LOW
+
+    def test_socat_tunnel_low(self):
+        e = _event(
+            event_type="process",
+            user="root",
+            evidence_path="live/ps_auxf.txt",
+            message="process root pid=1: socat TCP-LISTEN:4444,fork EXEC:/bin/bash",
+        )
+        findings = remote_access.detect([e])
+        assert findings and findings[0].severity == Severity.LOW
+
+    def test_socat_plain_silent(self):
+        e = _event(
+            event_type="process",
+            user="root",
+            evidence_path="live/ps_auxf.txt",
+            message="process root pid=1: socat -V",
+        )
+        assert remote_access.detect([e]) == []
+
+    def test_tailscale_info(self):
+        e = _event(
+            event_type="systemd_exec",
+            user="root",
+            evidence_path="/usr/lib/systemd/system/tailscaled.service",
+            message="ExecStart=/usr/sbin/tailscaled (user=root)",
+        )
+        findings = remote_access.detect([e])
+        assert findings and findings[0].severity == Severity.INFO
+
+    def test_benign_silent(self):
+        events = [
+            _event(
+                event_type="process",
+                user="root",
+                evidence_path="live/ps_auxf.txt",
+                message="process root pid=1: /sbin/init",
+            ),
+            _event(
+                event_type="cron_job",
+                user="root",
+                evidence_path="/etc/crontab",
+                message="cron [0 3 * * *] root: /usr/local/bin/backup.sh",
+            ),
+        ]
+        assert remote_access.detect(events) == []
+
+    def test_generated_hosts_have_none(self, generated, tmp_path):
+        import json
+
+        from linuxdfir import cli
+
+        for profile in ("infected", "clean"):
+            archive = generated["results"][profile]["archive"]
+            out = tmp_path / profile
+            assert cli.main(["parse", str(archive), "-o", str(out)]) == 0
+            fout = tmp_path / f"{profile}-findings"
+            assert cli.main(["detect", str(out), "-o", str(fout)]) == 0
+            findings = json.loads((fout / "findings.json").read_text(encoding="utf-8"))
+            assert [f for f in findings if f["rule"] == "remote_access_tooling"] == []
