@@ -98,6 +98,7 @@ FALLBACK_DEFAULTS: dict = {
     "ioc": {"max_per_type": 200, "suppress": []},
     "business_hours": {"start": 8, "end": 18},
     "yara": {"severity": "high", "max_file_mb": 16},
+    "sigma": {"severity": "medium"},
 }
 
 

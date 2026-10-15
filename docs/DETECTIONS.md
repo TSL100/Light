@@ -479,6 +479,47 @@ rules tightly and suppress noisy ones with `[allowlist].findings`
 YARA findings flow through the same postprocessing, scoring, and reporting.
 
 ---
+
+## `sigma_match` (optional Sigma rules)
+
+**Rule:** `sigma_match` (severity from Sigma `level`, else `[sigma].severity`)
+
+**Logic.** `scan-sigma`, or `detect`/`run --sigma-rules <dir>`, loads every
+`.yml`/`.yaml` file in the given folder and evaluates a documented Sigma
+subset against normalized events. Each Sigma rule that matches at least one
+event becomes one finding whose title names the rule and id, with refs to the
+matched events.
+
+Only the Linux subset is evaluated: `logsource` must carry
+`product: linux` **and** either `category: process_creation` or `service` in
+`{auth, syslog, auditd}`. Rules outside that subset are counted as skipped
+(`rules_skipped_logsource` with per-file reasons), never silently dropped.
+
+| Supported | Details |
+| --- | --- |
+| Conditions | bare selection, `and` / `or` / `not`, parentheses, `1 of X*`, `all of X*` |
+| Values | exact, lists (OR), `|contains`, `|startswith`, `|endswith`, `|re`, `|all` for list-AND |
+| Fields | mapped onto Event attributes (`User`→`user`, `CommandLine`/`Image`→`message`, `EventType`→`event_type`, `Host`→`host`, `Path`→`evidence_path`, `tags`→`tags`, …) |
+| Severity | Sigma `level` (`informational`→info … `critical`→critical), else `[sigma].severity` (`"medium"`) |
+| MITRE | `attack.tXXXX[.xxx]` tags become MITRE IDs |
+
+String comparison is case-insensitive except `|re`. Unknown fields,
+modifiers, bad regexes, malformed YAML, or missing `detection.condition`
+are load-time errors naming the rule file — never silent non-matches.
+
+**Dependency.** Requires PyYAML (`pip install .[sigma]`). The import is
+lazy: without it the scan is **skipped cleanly** — `scan-sigma` exits 0
+with `status: skipped`, and `detect`/`run` continue and print
+`sigma : skipped (...)`. No rules are shipped; the analyst always supplies
+the folder, and an empty folder is an error, not a silent pass.
+
+**FP notes.** Match quality is rule-dependent. Prefer the community-tested
+Linux rules, scope `contains` selections tightly, and suppress noisy ones
+with `[allowlist].findings` (`rule = "sigma_match"`) or
+`[severity_overrides]` — Sigma findings flow through the same
+postprocessing, scoring, and reporting.
+
+---
 ## Correlation and IOCs
 
 After detection, findings sharing an entity (IP, path, rare username) are

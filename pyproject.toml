@@ -14,6 +14,7 @@ dependencies = ["tzdata>=2024.1"]
 [project.optional-dependencies]
 remote = ["paramiko>=3.4"]
 yara = ["yara-python>=4.3"]
+sigma = ["pyyaml>=6.0"]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]

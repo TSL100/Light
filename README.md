@@ -182,6 +182,20 @@ linuxdfir run evidence.tar.gz -o case-out --yara-rules .\my-rules
 Scans collected file bytes with your own `.yar`/`.yara` folder; each
 (file, rule) hit becomes a `yara_match` finding. Skipped cleanly when
 yara-python is missing. See `docs/DETECTIONS.md` (`yara_match`).
+
+### Optional Sigma rule matching
+
+```powershell
+pip install .[sigma]
+linuxdfir scan-sigma case-out --rules .\my-sigma-rules -o case-out
+linuxdfir run evidence.tar.gz -o case-out --sigma-rules .\my-sigma-rules
+```
+
+Matches your own Sigma `.yml`/`.yaml` folder (Linux
+auth/syslog/auditd/process_creation subset) against normalized events; each
+matching rule becomes a `sigma_match` finding naming the rule and id.
+Skipped cleanly when PyYAML is missing. See `docs/DETECTIONS.md`
+(`sigma_match`).
 ## Configuring detections
 
 Tune without touching code via a TOML file copied from

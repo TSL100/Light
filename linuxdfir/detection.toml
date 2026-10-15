@@ -176,3 +176,12 @@ end = 18
 # are skipped (still counted in the scan stats).
 severity = "high"
 max_file_mb = 16
+
+[sigma]
+# Optional Sigma matching (`scan-sigma`, or `detect`/`run --sigma-rules`).
+# Rules are NEVER shipped: the analyst supplies a folder of .yml/.yaml
+# files. Only the Linux subset is evaluated (product linux with category
+# process_creation or service auth/syslog/auditd); other rules are counted
+# as skipped, never silently dropped. Findings default to this severity
+# unless the rule's own `level` maps to one.
+severity = "medium"
