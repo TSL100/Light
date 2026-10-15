@@ -95,8 +95,9 @@ def _executable(fields: dict) -> bool:
 def _match_tool(path: str, names: tuple[str, ...]) -> str | None:
     lowered_parts = [part.lower() for part in path.split("/") if part]
     for part in lowered_parts:
+        stripped = part[1:] if part.startswith(".") else part
         for name in names:
-            if part == name or part.startswith(name):
+            if part == name or part.startswith(name) or stripped.startswith(name):
                 return name
     return None
 

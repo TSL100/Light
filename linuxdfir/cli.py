@@ -172,6 +172,21 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("out", help="output directory holding events.jsonl/findings.json (from parse/detect or run)")
     report.add_argument("--report-name", default="report.html", help="report file name")
     report.set_defaults(func=cmd_report)
+    secrets = sub.add_parser(
+        "scan-secrets",
+        help="scan collector output for accidental secret material before sharing",
+    )
+    secrets.add_argument("directory", help="collector output directory to scan recursively")
+    secrets.add_argument(
+        "-o", "--out", default=None, help="write scan_secrets.json into this directory"
+    )
+    secrets.add_argument(
+        "--max-match-lines",
+        type=int,
+        default=5,
+        help="maximum example lines to record per pattern (default: 5)",
+    )
+    secrets.set_defaults(func=cmd_scan_secrets)
     return parser
 
 
@@ -493,6 +508,126 @@ def cmd_report(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     print(f"report           : {target}")
     print(f"findings csv     : {outdir / 'findings.csv'}")
+    return EXIT_OK
+
+
+# Patterns a collector run should never leak into shared outputs. Each entry
+# is (label, regex); the redaction markers themselves (`[REDACTED-`) are
+# expected and ignored so a correctly-redacted run scans clean.
+_SECRET_SCANS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("modular-crypt hash", re.compile(r"\$(?:2[aby]|[156]|y)\$[^\s$:]+(?:\$[^\s$:]+)+")),
+    ("crypt hash field", re.compile(r"(?<![\w$])\$[^\s$:]{13,}\$[^\s$:]{13,}(?!\w)")),
+    ("ssh private key", re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----")),
+    ("sshpass -p", re.compile(r"\bsshpass\b[^\n]*?\s-p(?!ort\b)\s+(\"[^\"]+\"|'[^']+'|\S+)")),
+    (
+        "password assignment",
+        re.compile(
+            r"(?<![A-Za-z0-9_-])(?:--)?passw(?:or)?d[= ][\"']?"
+            r"(?!\[REDACTED-)([^\s\"'()]{6,})"
+        ),
+    ),
+    ("mysql -p", re.compile(r"\bmysql\b[^\n]*?\s-p(?!ort\b|assword)(\"[^\"]+\"|'[^']+'|\S+)")),
+    ("curl -u creds", re.compile(r"\bcurl\b[^\n]*?(?:-u|--user)\s+[^\s:]+:(\S+)")),
+    ("bearer token", re.compile(r"\bBearer\s+(?!\[REDACTED-)([A-Za-z0-9\-._~+/]{20,}=*)")),
+    ("basic auth", re.compile(r"Authorization:\s*Basic\s+(?!\[REDACTED-)([A-Za-z0-9+/=]{16,})")),
+    ("url credentials", re.compile(r"(?:https?|ftp)://[^/\s:@?#]+:([^/\s@?#]{4,})@")),
+    ("password query", re.compile(r"[?&](?:password|passwd|pwd|secret|token)=([^&\s\"']{4,})")),
+    ("api key query", re.compile(r"[?&](?:api[_-]?key|access[_-]?key|auth[_-]?token)=([^&\s\"']{12,})")),
+    ("aws access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("generic api key", re.compile(r"\b(?:sk|pk|api)[_-][A-Za-z0-9]{20,}\b")),
+)
+
+_SCAN_TEXT_LIMIT = 2 * 1024 * 1024
+_SCAN_BINARY_EXTS = {
+    ".gz", ".xz", ".zst", ".bz2", ".zip", ".7z", ".png", ".jpg", ".jpeg", ".gif",
+    ".ico", ".pdf", ".db", ".sqlite", ".sqlite3", ".so", ".ko", ".bin", ".pyc",
+}
+
+
+def _scan_text_for_secrets(text: str, max_lines: int) -> list[dict]:
+    """Return secret-pattern hits with redacted previews; never echoes secrets."""
+    import hashlib
+
+    def _fp(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8", "ignore")).hexdigest()[:8]
+
+    hits: list[dict] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        for label, pattern in _SECRET_SCANS:
+            for match in pattern.finditer(line):
+                secret = next((g for g in match.groups() if g), match.group(0))
+                if secret.startswith("[REDACTED-"):
+                    continue
+                # Preview masks everything after the pattern's literal prefix.
+                start = max(match.start(), 0)
+                prefix_len = match.end() - match.start() - len(secret)
+                preview = (
+                    line[max(0, start - 20): start + max(prefix_len, 0)]
+                    + f"[REDACTED-{label.upper()}:{_fp(secret)}]"
+                )
+                hits.append({"line": lineno, "kind": label, "preview": preview[:200]})
+                if len([h for h in hits if h["kind"] == label]) >= max_lines:
+                    return hits
+    return hits
+
+
+def cmd_scan_secrets(args: argparse.Namespace) -> int:
+    root = Path(args.directory)
+    if not root.is_dir():
+        print(f"scan-secrets failed: not a directory: {root}", file=sys.stderr)
+        return EXIT_ERROR
+    max_lines = max(1, args.max_match_lines)
+    scanned = 0
+    skipped = 0
+    findings: list[dict] = []
+    progress = _Progress("scan-secrets")
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() in _SCAN_BINARY_EXTS or path.stat().st_size > _SCAN_TEXT_LIMIT:
+            skipped += 1
+            continue
+        scanned += 1
+        if scanned % 200 == 0:
+            progress.update(f"scanned {scanned} files, {len(findings)} hits")
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            skipped += 1
+            continue
+        hits = _scan_text_for_secrets(text, max_lines)
+        if hits:
+            findings.append(
+                {
+                    "file": str(path.relative_to(root)),
+                    "hits": hits,
+                    "total_hits": len(hits),
+                }
+            )
+    report = {
+        "directory": str(root),
+        "files_scanned": scanned,
+        "files_skipped": skipped,
+        "files_with_hits": len(findings),
+        "total_hits": sum(f["total_hits"] for f in findings),
+        "findings": findings,
+    }
+    print(f"files scanned    : {scanned} (skipped {skipped} binary/oversize)")
+    print(f"files with hits  : {len(findings)}")
+    print(f"total secret hits: {report['total_hits']}")
+    for finding in findings:
+        print(f"  {finding['file']}: {finding['total_hits']} hit(s)")
+        for hit in finding["hits"]:
+            print(f"    line {hit['line']} [{hit['kind']}] {term_safe(hit['preview'])}")
+    if args.out:
+        outdir = Path(args.out)
+        try:
+            outdir.mkdir(parents=True, exist_ok=True)
+            json_report.atomic_write_json(outdir / "scan_secrets.json", report)
+        except (OSError, json_report.WriteError) as exc:
+            print(f"scan-secrets failed while writing outputs: {term_safe(exc)}", file=sys.stderr)
+            return EXIT_ERROR
+        print(f"report           : {outdir / 'scan_secrets.json'}")
     return EXIT_OK
 
 

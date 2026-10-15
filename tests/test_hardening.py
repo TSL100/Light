@@ -373,6 +373,57 @@ def test_offensive_tool_not_suppressed_by_timestomp_allowlist():
     assert findings, "timestomp provenance prefix must not suppress tool detection"
 
 
+def test_offensive_tool_hidden_dot_directory_reported():
+    """A hidden tool directory such as /root/.evilginx must still match."""
+    from linuxdfir.detectors import offensive_tools
+
+    cfg = load_config()
+    findings = offensive_tools.detect(
+        [_fs_event("/root/.evilginx/config.yml"), _fs_event("/root/.evilgophish/run.sh")],
+        config=cfg,
+    )
+    tools = " ".join(f.title for f in findings)
+    assert "evilginx" in tools
+    assert "evilgophish" in tools
+    assert all(f.severity in (Severity.INFO, Severity.LOW) for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# scan-secrets: collector output must not leak secret material
+# ---------------------------------------------------------------------------
+
+
+def test_scan_secrets_detects_and_never_echoes(tmp_path):
+    from linuxdfir.cli import main
+
+    secret = "hunter2SuperSecretValue"
+    (tmp_path / "history.txt").write_text(
+        f"echo password={secret}\nsshpass -p {secret} ssh root@10.0.0.1\n", encoding="utf-8"
+    )
+    (tmp_path / "clean.txt").write_text("echo hello\n", encoding="utf-8")
+    out = tmp_path / "out"
+    rc = main(["scan-secrets", str(tmp_path), "-o", str(out)])
+    assert rc == 0
+    report = json.loads((out / "scan_secrets.json").read_text(encoding="utf-8"))
+    assert report["files_with_hits"] >= 1
+    assert report["total_hits"] >= 2
+    # The raw secret must never appear in any report field.
+    blob = json.dumps(report)
+    assert secret not in blob
+    assert "[REDACTED-" in blob
+
+
+def test_scan_secrets_clean_run_is_clean(tmp_path):
+    """A correctly redacted run (markers only) must scan clean."""
+    from linuxdfir.cli import main
+
+    (tmp_path / "events.txt").write_text(
+        "echo [REDACTED-PASSWORD:ab12cd34] ssh\n", encoding="utf-8"
+    )
+    rc = main(["scan-secrets", str(tmp_path)])
+    assert rc == 0
+
+
 # ---------------------------------------------------------------------------
 # unusual_suid: type=dir skip + standard binaries allowlisted
 # ---------------------------------------------------------------------------
