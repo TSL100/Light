@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="Light — I am justice" width="720">
+</p>
+
 # LinuxDFIR Toolkit
 
 A read-only **Linux host collector** plus an offline **analyzer** for
