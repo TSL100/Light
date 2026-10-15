@@ -16,7 +16,16 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTOR_SH = REPO_ROOT / "collector" / "linux_collector.sh"
-REPO_WSL = "/mnt/c/Users/MOHAMED/Desktop/CyberSecurity/Defense/PoC1"
+
+
+def _wsl_repo_root() -> str:
+    """Map the Windows checkout path to its WSL mount point."""
+    text = str(REPO_ROOT).replace("\\", "/")
+    drive, _, rest = text.partition(":")
+    return f"/mnt/{drive.lower()}/{rest.lstrip('/')}"
+
+
+REPO_WSL = _wsl_repo_root()
 VENV_PY = REPO_WSL + "/.wslvenv/bin/python"
 TEST_SCRIPT = REPO_WSL + "/tests/_bash_collector_flow.sh"
 

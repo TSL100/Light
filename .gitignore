@@ -10,8 +10,14 @@ bench/results/
 bench/evidence/
 bench/*.json
 .wslvenv/
-.wsl_bash_*/
+.wsl_bash_*
 .tmp_*/
 .bash_test_run/
 .bash_test_out/
 .tmp_vr/
+# Local analysis results and personal helpers (never publish).
+case-out/
+extract_unparse.py
+part*.png
+*.tar.gz
+*.tgz

@@ -320,7 +320,7 @@ def test_realworld_formats(tmp_path):
     assert shutdown.timestamp_utc == datetime(2026, 9, 7, 6, 57, 9, 302778, tzinfo=UTC)
     auth_fail = by_line[5]
     assert auth_fail.event_type == "sudo_auth_failure"
-    assert auth_fail.user == "tsl"
+    assert auth_fail.user == "testuser"
     assert auth_fail.timestamp_utc == datetime(2026, 9, 9, 20, 23, 1, 15191, tzinfo=UTC)
     for event in events:
         assert event.evidence_path == "/var/log/auth.log"

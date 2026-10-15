@@ -4,7 +4,8 @@
 # analyzer. Prints the analyzer's summary lines so the caller can assert.
 set -euo pipefail
 
-REPO="/mnt/c/Users/MOHAMED/Desktop/CyberSecurity/Defense/PoC1"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(dirname "$SCRIPT_DIR")}"
 PY="$REPO/.wslvenv/bin/python"
 WORK="$REPO/.wsl_bash_flow"
 ROOT="$WORK/rootfs"
