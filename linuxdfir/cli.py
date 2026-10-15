@@ -14,6 +14,16 @@ from pathlib import Path
 
 from . import __version__
 from .baseline import scan_with_baseline
+from .case import (
+    build_case_record,
+    build_combined_timeline,
+    compute_overlap,
+    evidence_fallback_name,
+    prepare_hosts_root,
+    read_host_iocs,
+    summarize_host,
+    unique_host_dir,
+)
 from .config import load_config
 from .correlate import correlate_findings
 from .custody import current_argv, input_fingerprint, write_analysis_log
@@ -227,6 +237,42 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.set_defaults(func=cmd_run)
+    case = sub.add_parser(
+        "case",
+        help="analyze several evidence archives into one case folder",
+    )
+    case.add_argument(
+        "evidence",
+        nargs="+",
+        help="two or more evidence.tar.gz files or extracted evidence folders",
+    )
+    case.add_argument("-o", "--out", required=True, help="case directory (hosts/ rebuilt each run)")
+    case.add_argument(
+        "--parsers",
+        default="all",
+        help="comma-separated parser names or 'all' (default: all)",
+    )
+    case.add_argument(
+        "--config",
+        default=None,
+        help="detection tuning TOML (default: shipped detection.toml)",
+    )
+    case.add_argument(
+        "--yara-rules",
+        default=None,
+        help="folder of .yar/.yara rules applied to every host (skipped cleanly if missing)",
+    )
+    case.add_argument(
+        "--sigma-rules",
+        default=None,
+        help="folder of Sigma .yml/.yaml rules applied to every host",
+    )
+    case.add_argument(
+        "--baseline",
+        default=None,
+        help="clean-baseline source diffed against every host",
+    )
+    case.set_defaults(func=cmd_case)
     report = sub.add_parser("report", help="build report.html/findings.csv from a parsed output directory")
     report.add_argument("out", help="output directory holding events.jsonl/findings.json (from parse/detect or run)")
     report.add_argument("--report-name", default="report.html", help="report file name")
@@ -1099,6 +1145,115 @@ def cmd_run(args: argparse.Namespace) -> int:
         exit_code=final_code,
     )
     return final_code
+
+
+def _read_case_hostname(host_dir: Path) -> str | None:
+    try:
+        manifest = json.loads((host_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    hostname = manifest.get("hostname")
+    return str(hostname) if hostname else None
+
+
+def _print_case_summary(record: dict) -> None:
+    print(f"hosts            : {record['host_count']}")
+    for host in record["hosts"]:
+        print(
+            f"  {host['outdir']}: exit={host['exit_code']} "
+            f"integrity={host['integrity_ok']} risk={host['risk_score']} "
+            f"findings={host['findings_total']} ({host['findings_actionable']} actionable) "
+            f"<- {term_safe(str(host['evidence']))}"
+        )
+    overlap = record["overlap"]
+    print(f"shared indicators: {len(overlap)} (external ip/domain/url/hash on 2+ hosts)")
+    for entry in overlap[:10]:
+        print(
+            f"  [{entry['type']}] {term_safe(str(entry['value']))} "
+            f"on {entry['host_count']} hosts: {', '.join(entry['hosts'])}"
+        )
+    if len(overlap) > 10:
+        print(f"  ... and {len(overlap) - 10} more (see case.json)")
+    timeline = record["timeline"]
+    print(
+        f"combined timeline: {timeline['rows']} rows over {len(timeline['hosts'])} host(s) "
+        f"-> {term_safe(str(timeline['path_csv']))}"
+    )
+    print(f"case record      : {term_safe(str(record.get('path', 'case.json')))}")
+
+
+def cmd_case(args: argparse.Namespace) -> int:
+    case_dir = Path(args.out)
+    try:
+        case_dir.mkdir(parents=True, exist_ok=True)
+        json_report.require_free_space(case_dir)
+        # Fail fast on a bad --config instead of after the first host run.
+        load_config(getattr(args, "config", None))
+    except (OSError, ValueError) as exc:
+        print(f"case failed: {term_safe(exc)}", file=sys.stderr)
+        return EXIT_ERROR
+    argv = getattr(args, "_argv", None) or current_argv(None)
+    try:
+        hosts_root = prepare_hosts_root(case_dir)
+    except OSError as exc:
+        print(f"case failed: cannot prepare hosts directory: {term_safe(exc)}", file=sys.stderr)
+        return EXIT_ERROR
+    summaries: list[dict] = []
+    worst = EXIT_OK
+    for index, source in enumerate(args.evidence):
+        pending = hosts_root / f"__pending_{index}"
+        try:
+            code = cmd_run(
+                argparse.Namespace(
+                    evidence=source,
+                    out=str(pending),
+                    parsers=args.parsers,
+                    config=args.config,
+                    _argv=argv,
+                    yara_rules=getattr(args, "yara_rules", None),
+                    sigma_rules=getattr(args, "sigma_rules", None),
+                    baseline=getattr(args, "baseline", None),
+                )
+            )
+        except (OSError, ValueError) as exc:
+            print(f"case: host {term_safe(str(source))} failed: {term_safe(exc)}", file=sys.stderr)
+            code = EXIT_ERROR
+        worst = max(worst, code)
+        try:
+            hostname = _read_case_hostname(pending)
+            final = unique_host_dir(hosts_root, hostname, evidence_fallback_name(source))
+            if final != pending:
+                pending.rename(final)
+        except OSError as exc:
+            print(f"case: cannot finalize host directory: {term_safe(exc)}", file=sys.stderr)
+            final = pending
+            worst = max(worst, EXIT_ERROR)
+        summaries.append(summarize_host(final, str(source), code))
+    participants = {
+        entry["outdir"]: hosts_root / entry["outdir"]
+        for entry in summaries
+        if (hosts_root / entry["outdir"] / "events.jsonl").is_file()
+    }
+    host_iocs = {name: read_host_iocs(path) for name, path in participants.items()}
+    overlap, overlap_stats = compute_overlap(host_iocs)
+    try:
+        timeline_stats = build_combined_timeline(
+            participants,
+            case_dir / "combined_timeline.db",
+            case_dir / "combined_timeline.csv",
+            case_dir / "combined_events.jsonl",
+        )
+        timeline_stats["path_db"] = str(case_dir / "combined_timeline.db")
+        timeline_stats["path_csv"] = str(case_dir / "combined_timeline.csv")
+        timeline_stats["path_jsonl"] = str(case_dir / "combined_events.jsonl")
+        record = build_case_record(summaries, overlap, overlap_stats, timeline_stats, argv)
+        record["path"] = str(case_dir / "case.json")
+        json_report.atomic_write_json(case_dir / "case.json", record)
+    except (OSError, json_report.WriteError, ValueError) as exc:
+        print(f"case failed while writing case outputs: {term_safe(exc)}", file=sys.stderr)
+        return EXIT_ERROR
+    _print_case_summary(record)
+    return worst
 
 
 def main(argv: list[str] | None = None) -> int:

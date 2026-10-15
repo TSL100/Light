@@ -150,6 +150,21 @@ severity-tagged (critical → info), each with a count, MITRE ATT&CK references,
 and pointers back to the source artifact (for example
 `/var/log/auth.log:18`).
 
+### Multi-host cases
+
+```powershell
+linuxdfir case web01.tar.gz web02.tar.gz web03.tar.gz -o case-2026-02
+```
+
+Runs the full pipeline per archive into `case-2026-02/hosts/<hostname>/`,
+then writes case-level outputs: `case.json` (per-host scores plus the
+cross-host IOC overlap table — external IPs, domains, URLs and hashes seen
+on two or more hosts), `combined_timeline.csv` / `.db` /
+`combined_events.jsonl` merging every host's events with the `host` column
+kept. Rule flags (`--yara-rules`, `--sigma-rules`, `--baseline`) apply to
+every host. Exit code is the worst per-host code; a failed host is recorded
+in `case.json` without stopping the rest.
+
 ### Selecting parsers
 
 ```powershell
