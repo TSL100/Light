@@ -520,6 +520,43 @@ with `[allowlist].findings` (`rule = "sigma_match"`) or
 postprocessing, scoring, and reporting.
 
 ---
+
+## `baseline_*` (clean-baseline drift)
+
+**Rules:** `baseline_users`, `baseline_suid`, `baseline_cron`,
+`baseline_systemd`, `baseline_packages`, `baseline_listeners`
+(added = `[baseline].severity_added`, default high;
+removed = `[baseline].severity_removed`, default medium)
+
+**Logic.** `scan-baseline`, or `detect`/`run --baseline <src>`, reduces the
+target and the clean baseline to six stable sets and reports additions and
+removals, one finding per (category, direction):
+
+| Rule | Compared set (identity key) | MITRE |
+| --- | --- | --- |
+| `baseline_users` | `user_account` usernames | T1136 |
+| `baseline_suid` | `suid_sgid_file` paths | T1548.001 |
+| `baseline_cron` | `cron_job` schedule+user+command | T1053.003 |
+| `baseline_systemd` | `systemd_unit` unit file paths | T1543.002 |
+| `baseline_packages` | install/update package names (arch stripped) | T1588.002 |
+| `baseline_listeners` | LISTEN sockets as netid+address:port+process (PID stripped) | T1059.004 |
+
+Each side of `--baseline` / `scan-baseline` may be events.jsonl, a directory
+holding it, or evidence to parse. Only categories with coverage on **both**
+sides are compared; the rest are counted as `skipped_no_coverage` (e.g. a
+baseline collected with `--skip-live` cannot usefully diff listeners), never
+reported as drift.
+
+**FP notes.** The baseline must match the host's distro, role, and collection
+options, or every legitimate difference becomes a finding. Package drift
+compares install *log history*, not the installed set — differing rotation
+windows add noise. A process restarted under a new name on the same port
+counts as drift by design. Suppress expected drift per category with
+`[allowlist].findings` (`rule = "baseline_users"`, …) — drift findings flow
+through the same postprocessing, scoring, and reporting.
+
+---
+
 ## Correlation and IOCs
 
 After detection, findings sharing an entity (IP, path, rare username) are

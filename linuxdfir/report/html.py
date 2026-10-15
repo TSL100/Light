@@ -196,6 +196,12 @@ SEVERITY_ORDER = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LO
 RULE_GUIDANCE = dict(DETECTOR_RULE_INFO)
 RULE_GUIDANCE.update(INGEST_RULE_INFO)
 try:
+    from ..baseline import RULE_INFO as BASELINE_RULE_INFO
+
+    RULE_GUIDANCE.update(BASELINE_RULE_INFO)
+except ImportError:  # pragma: no cover - baseline is dependency-free; defensive only
+    pass
+try:
     from ..sigma_scan import RULE_INFO as SIGMA_RULE_INFO
 
     RULE_GUIDANCE.update(SIGMA_RULE_INFO)

@@ -7,11 +7,13 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 from . import __version__
+from .baseline import scan_with_baseline
 from .config import load_config
 from .correlate import correlate_findings
 from .custody import current_argv, input_fingerprint, write_analysis_log
@@ -177,6 +179,14 @@ def build_parser() -> argparse.ArgumentParser:
             "skipped cleanly if PyYAML is missing)"
         ),
     )
+    detect.add_argument(
+        "--baseline",
+        default=None,
+        help=(
+            "clean-baseline source to diff against: events.jsonl, a directory "
+            "holding it, or evidence to parse (additions/removals become findings)"
+        ),
+    )
     detect.set_defaults(func=cmd_detect)
     run = sub.add_parser("run", help="verify + parse + detect + report in one step")
     run.add_argument("evidence", help="evidence.tar.gz file or an extracted evidence folder")
@@ -206,6 +216,14 @@ def build_parser() -> argparse.ArgumentParser:
             "folder of Sigma .yml/.yaml rules to match against events "
             "(linux auth/syslog/auditd/process_creation subset; "
             "skipped cleanly if PyYAML is missing)"
+        ),
+    )
+    run.add_argument(
+        "--baseline",
+        default=None,
+        help=(
+            "clean-baseline source to diff against: evidence archive/folder, "
+            "events.jsonl, or a directory holding it"
         ),
     )
     run.set_defaults(func=cmd_run)
@@ -272,6 +290,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="detection tuning TOML (default: shipped detection.toml)",
     )
     sigma.set_defaults(func=cmd_scan_sigma)
+    baseline_cmd = sub.add_parser(
+        "scan-baseline",
+        help="diff a target against a clean baseline (additions/removals as findings)",
+    )
+    baseline_cmd.add_argument(
+        "target",
+        help="target side: events.jsonl, a directory holding it, or evidence to parse",
+    )
+    baseline_cmd.add_argument(
+        "--baseline",
+        required=True,
+        help="clean-baseline side: events.jsonl, a directory holding it, or evidence to parse",
+    )
+    baseline_cmd.add_argument(
+        "-o", "--out", default=None, help="output directory for baseline_findings.json"
+    )
+    baseline_cmd.add_argument(
+        "--config",
+        default=None,
+        help="detection tuning TOML (default: shipped detection.toml)",
+    )
+    baseline_cmd.set_defaults(func=cmd_scan_baseline)
     return parser
 
 
@@ -532,6 +572,45 @@ def _print_sigma_summary(stats: dict) -> None:
         f"({stats['rules_loaded']} rule(s) loaded, "
         f"{stats['rules_skipped_logsource']} skipped by logsource)"
     )
+
+
+def _print_baseline_summary(stats: dict) -> None:
+    """Multi-line baseline outcome for detect/run/scan-baseline output."""
+    print(
+        f"baseline         : {stats['findings']} drift finding(s), "
+        f"{stats['compared']} of {len(stats['categories'])} categories compared "
+        f"(target {term_safe(str(stats['target']))} vs baseline "
+        f"{term_safe(str(stats['baseline']))})"
+    )
+    for rule, entry in stats["categories"].items():
+        if entry["compared"]:
+            print(
+                f"  {rule}: baseline={entry['baseline_count']} target={entry['target_count']} "
+                f"added={entry['added']} removed={entry['removed']}"
+            )
+        else:
+            print(f"  {rule}: skipped (no coverage on {', '.join(entry['skipped_no_coverage'])})")
+
+
+def _load_side_events(source: str | Path, workdir: Path) -> list[Event]:
+    """Load events for one baseline side: parsed events or evidence to parse.
+
+    ``source`` is events.jsonl, a directory holding it, or evidence
+    (archive/folder) which is parsed with all parsers into ``workdir``.
+    """
+    path = Path(source)
+    if path.is_file() and path.suffix == ".jsonl":
+        return _load_events(path).load_all()
+    if path.is_dir() and (path / "events.jsonl").is_file():
+        return _load_events(path).load_all()
+    with Evidence.open(path) as evidence:
+        names, selected = resolve_parser_names("all")
+        parsed_dir = workdir / "parsed"
+        parsed_dir.mkdir(parents=True, exist_ok=True)
+        run_parse_pipeline(evidence, parsed_dir, names, selected)
+        return _load_events(parsed_dir).load_all()
+
+
 def cmd_detect(args: argparse.Namespace) -> int:
     try:
         stream = _load_events(Path(args.events))
@@ -592,6 +671,34 @@ def cmd_detect(args: argparse.Namespace) -> int:
             force=True,
         )
         base.extend(sigma_findings)
+    baseline_stats: dict | None = None
+    baseline_source = getattr(args, "baseline", None)
+    if baseline_source:
+        try:
+            if args.out:
+                workdir = Path(args.out) / "baseline-work"
+                workdir.mkdir(parents=True, exist_ok=True)
+                baseline_events = _load_side_events(baseline_source, workdir)
+            else:
+                with tempfile.TemporaryDirectory(prefix="linuxdfir-baseline-") as tmp:
+                    baseline_events = _load_side_events(baseline_source, Path(tmp))
+            baseline_findings, baseline_stats = scan_with_baseline(
+                events,
+                baseline_events,
+                config,
+                target_label=str(getattr(args, "events", "target")),
+                baseline_label=str(baseline_source),
+            )
+        except (EvidenceError, UnsafeArchiveError) as exc:
+            print(f"detect failed: cannot open baseline: {term_safe(exc)}", file=sys.stderr)
+            return EXIT_ERROR
+        except (OSError, ValueError) as exc:
+            print(f"detect failed: baseline diff: {term_safe(exc)}", file=sys.stderr)
+            return EXIT_ERROR
+        progress.update(
+            f"baseline diff: {len(baseline_findings)} drift finding(s)", force=True
+        )
+        base.extend(baseline_findings)
     findings = postprocess_findings(base, config)
     info_count = sum(1 for finding in findings if finding.severity == Severity.INFO)
     real_count = len(findings) - info_count
@@ -635,6 +742,8 @@ def cmd_detect(args: argparse.Namespace) -> int:
         _print_yara_summary(yara_stats)
     if sigma_stats is not None:
         _print_sigma_summary(sigma_stats)
+    if baseline_stats is not None:
+        _print_baseline_summary(baseline_stats)
     if stream.skipped:
         print(f"skipped lines    : {stream.skipped}")
     for finding in sorted(findings, key=lambda f: (f.severity.value, f.rule)):
@@ -877,6 +986,62 @@ def cmd_scan_sigma(args: argparse.Namespace) -> int:
             return EXIT_ERROR
         print(f"report           : {outdir / 'sigma_findings.json'}")
     return EXIT_OK
+
+
+def cmd_scan_baseline(args: argparse.Namespace) -> int:
+    try:
+        config = load_config(getattr(args, "config", None))
+    except (OSError, ValueError) as exc:
+        print(f"scan-baseline failed: bad config: {term_safe(exc)}", file=sys.stderr)
+        return EXIT_ERROR
+    try:
+        if args.out:
+            workdir = Path(args.out) / "baseline-work"
+        else:
+            workdir = Path(tempfile.mkdtemp(prefix="linuxdfir-baseline-"))
+        workdir.mkdir(parents=True, exist_ok=True)
+        target_events = _load_side_events(args.target, workdir / "target")
+        baseline_events = _load_side_events(args.baseline, workdir / "baseline")
+        findings, stats = scan_with_baseline(
+            target_events,
+            baseline_events,
+            config,
+            target_label=str(args.target),
+            baseline_label=str(args.baseline),
+        )
+    except (EvidenceError, UnsafeArchiveError) as exc:
+        print(f"scan-baseline failed: {term_safe(exc)}", file=sys.stderr)
+        return EXIT_ERROR
+    except (OSError, ValueError) as exc:
+        print(f"scan-baseline failed: {term_safe(exc)}", file=sys.stderr)
+        return EXIT_ERROR
+    _print_baseline_summary(stats)
+    for finding in sorted(findings, key=lambda f: (f.severity.value, f.rule)):
+        refs = ", ".join(f"{ref.evidence_path}:{ref.line_or_offset}" for ref in finding.refs[:3])
+        print(f"  [{finding.severity.value.upper():8}] {finding.rule}: {term_safe(finding.title)}")
+        print(f"           count={finding.count} mitre={','.join(finding.mitre_ids)} refs={term_safe(refs)}")
+    if args.out:
+        outdir = Path(args.out)
+        try:
+            outdir.mkdir(parents=True, exist_ok=True)
+            json_report.require_free_space(outdir)
+            json_report.atomic_write_json(
+                outdir / "baseline_findings.json",
+                {
+                    "status": stats["status"],
+                    "target": stats.get("target"),
+                    "baseline": stats.get("baseline"),
+                    "stats": stats,
+                    "findings": [finding.to_dict() for finding in findings],
+                },
+            )
+        except (OSError, json_report.WriteError) as exc:
+            print(f"scan-baseline failed while writing outputs: {term_safe(exc)}", file=sys.stderr)
+            return EXIT_ERROR
+        print(f"report           : {outdir / 'baseline_findings.json'}")
+    return EXIT_OK
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     started = datetime.now(UTC)
     outdir = Path(args.out)
@@ -901,6 +1066,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             yara_rules=getattr(args, "yara_rules", None),
             evidence=args.evidence,
             sigma_rules=getattr(args, "sigma_rules", None),
+            baseline=getattr(args, "baseline", None),
         )
     )
     if detect_code != EXIT_OK:

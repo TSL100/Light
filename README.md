@@ -196,6 +196,20 @@ auth/syslog/auditd/process_creation subset) against normalized events; each
 matching rule becomes a `sigma_match` finding naming the rule and id.
 Skipped cleanly when PyYAML is missing. See `docs/DETECTIONS.md`
 (`sigma_match`).
+
+### Optional clean-baseline drift
+
+```powershell
+linuxdfir scan-baseline case-out --baseline clean-events -o case-out
+linuxdfir run evidence.tar.gz -o case-out --baseline clean.tar.gz
+```
+
+Diffs the target against a known-clean baseline (users, SUID set, cron
+entries, systemd units, packages, listeners); additions and removals become
+`baseline_*` findings. Each side may be events or evidence to parse.
+Categories without coverage on both sides are skipped, not reported. See
+`docs/DETECTIONS.md` (`baseline_*`).
+
 ## Configuring detections
 
 Tune without touching code via a TOML file copied from

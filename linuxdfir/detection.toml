@@ -185,3 +185,10 @@ max_file_mb = 16
 # as skipped, never silently dropped. Findings default to this severity
 # unless the rule's own `level` maps to one.
 severity = "medium"
+
+[baseline]
+# Clean-baseline drift (`scan-baseline`, or `detect`/`run --baseline`).
+# Only categories with coverage on BOTH sides are compared; the rest are
+# counted as skipped, never reported as drift.
+severity_added = "high"
+severity_removed = "medium"
