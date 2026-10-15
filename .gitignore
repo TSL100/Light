@@ -9,3 +9,9 @@ bench/out/
 bench/results/
 bench/evidence/
 bench/*.json
+.wslvenv/
+.wsl_bash_*/
+.tmp_*/
+.bash_test_run/
+.bash_test_out/
+.tmp_vr/
