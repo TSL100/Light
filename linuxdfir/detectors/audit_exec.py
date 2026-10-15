@@ -54,9 +54,8 @@ def _match_argv(argv: str) -> list[str]:
 
 
 def detect(events: Iterable[Event]) -> list[Finding]:
-    materialized = list(events)
     findings: list[Finding] = []
-    for event in materialized:
+    for event in events:
         if event.event_type != "audit_exec":
             continue
         info = parse_audit_exec_message(event.message)
@@ -78,7 +77,7 @@ def detect(events: Iterable[Event]) -> list[Finding]:
                 refs=[Ref(event.evidence_path, event.line_or_offset)],
             )
         )
-    for event in materialized:
+    for event in events:
         if event.event_type != "audit_event":
             continue
         match = AUID_UID_RE.search(event.message)

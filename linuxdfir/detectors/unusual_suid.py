@@ -2,7 +2,7 @@
 
 SUID/SGID files grant privilege escalation primitives; anything outside
 the configured allowlist raises a finding. Binaries in world-writable
-paths are HIGH regardless of name (an attacker can drop /tmp/sudo with
+paths are HIGH regardless of name (any local user can drop /tmp/sudo with
 mode 4755), everything else is MEDIUM and aggregated into one finding
 per severity tier so a noisy host does not flood the report.
 """
@@ -23,7 +23,8 @@ RULE_INFO = {
     RULE: {
         "why": (
             "SUID/SGID bits turn any file into a privilege-escalation vector; "
-            "attackers drop new ones in writable paths or trojanize existing ones."
+            "world-writable paths let any local user place new ones, and "
+            "package files can be trojanized."
         ),
         "next_steps": [
             "Verify the binary's signature or package provenance (dpkg -S, rpm -qf).",
@@ -50,6 +51,8 @@ def detect(events: Iterable[Event], config: dict | None = None) -> list[Finding]
         fields = parse_fs_message(event.message)
         if fields is None:
             continue
+        if fields.get("type") == "dir":
+            continue
         path = fields.get("path", "")
         if not path or path.lower() in allowlist:
             continue
@@ -71,8 +74,8 @@ def detect(events: Iterable[Event], config: dict | None = None) -> list[Finding]
                 description=(
                     f"{len(highs)} SUID/SGID file(s) sit in world-writable locations: "
                     f"{names}. Writable-path SUID is the classic local privilege-escalation "
-                    "drop (attacker-controlled mode 4755 binary); treat as hostile until "
-                    "provenance is verified."
+                    "drop (a mode 4755 binary any local user can replace); treat as hostile "
+                    "until provenance is verified."
                 ),
                 mitre_ids=["T1548.001"],
                 first_seen=highs[0].timestamp_utc,

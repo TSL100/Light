@@ -1,6 +1,11 @@
 sample_evidence/out/
 __pycache__/
 .pytest_cache/
+.ruff_cache/
 *.egg-info/
 build/
 dist/
+bench/out/
+bench/results/
+bench/evidence/
+bench/*.json

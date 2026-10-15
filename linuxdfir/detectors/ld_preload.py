@@ -29,11 +29,10 @@ LD_PRELOAD_ENV_RE = re.compile(r"\bLD_PRELOAD\s*=")
 
 
 def detect(events: Iterable[Event]) -> list[Finding]:
-    materialized = list(events)
     findings: list[Finding] = []
 
     by_file: dict[str, list[Event]] = {}
-    for event in materialized:
+    for event in events:
         if event.event_type == "preload_entry":
             by_file.setdefault(event.evidence_path, []).append(event)
     for path in sorted(by_file):
@@ -53,7 +52,7 @@ def detect(events: Iterable[Event]) -> list[Finding]:
         )
 
     by_env_file: dict[str, list[Event]] = {}
-    for event in materialized:
+    for event in events:
         if event.event_type in ("systemd_env", "startup_line") and LD_PRELOAD_ENV_RE.search(event.message):
             by_env_file.setdefault(event.evidence_path, []).append(event)
     for path in sorted(by_env_file):

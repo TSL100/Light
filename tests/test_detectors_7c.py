@@ -159,14 +159,18 @@ class TestTimestomp:
         assert cohort and cohort[0].severity == Severity.LOW
         assert "config.conf" in cohort[0].title
 
-    def test_var_log_excluded_from_cohort(self):
+    def test_var_log_cohort_lowers_to_info(self):
         events = [
             _recent("/var/log/old.log", mtime="2025-06-01T00:00:00Z"),
             _recent("/var/log/new1.log", mtime="2026-01-02T00:00:00Z"),
             _recent("/var/log/new2.log", mtime="2026-01-02T01:00:00Z"),
             _recent("/var/log/new3.log", mtime="2026-01-02T02:00:00Z"),
         ]
-        assert timestomp_detection.detect(events) == []
+        findings = timestomp_detection.detect(events)
+        cohort = [f for f in findings if "Cohort timestomp outlier" in f.title]
+        assert cohort, "/var/log cohort outliers are reported, not skipped"
+        assert all(f.severity == Severity.INFO for f in cohort)
+        assert all("Provenance condition" in f.description for f in cohort)
 
 
 # ------------------------------------------------------- suspicious_processes

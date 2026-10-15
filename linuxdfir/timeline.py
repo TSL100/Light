@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from .report.sanitize import sanitize_cell
 from .schema import Event, Finding
 
 EARLIEST_SANE = datetime(2000, 1, 1, tzinfo=UTC)
@@ -60,10 +62,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedup ON events(
     source_artifact, evidence_path, COALESCE(line_raw, ''),
     event_type, message, COALESCE(timestamp_utc, '')
 );
+"""
+
+SECONDARY_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp_utc);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 CREATE INDEX IF NOT EXISTS idx_events_user ON events(user);
 CREATE INDEX IF NOT EXISTS idx_events_artifact ON events(source_artifact);
+"""
+
+PRAGMAS_SQL = """
+PRAGMA journal_mode = OFF;
+PRAGMA synchronous = OFF;
+PRAGMA temp_store = MEMORY;
 """
 
 INSERT_SQL = """
@@ -183,20 +194,20 @@ def _row_to_json(row: sqlite3.Row) -> str:
 def _row_to_csv(row: sqlite3.Row) -> list:
     line = row["line_int"] if row["line_int"] is not None else row["line_raw"]
     return [
-        row["timestamp_utc"] or "",
-        row["timestamp_quality"],
+        sanitize_cell(row["timestamp_utc"] or ""),
+        sanitize_cell(row["timestamp_quality"]),
         row["suspicious_time"],
-        row["host"] or "",
-        row["user"] or "",
-        row["source_artifact"],
-        row["event_type"],
-        row["message"],
-        row["evidence_path"],
+        sanitize_cell(row["host"] or ""),
+        sanitize_cell(row["user"] or ""),
+        sanitize_cell(row["source_artifact"]),
+        sanitize_cell(row["event_type"]),
+        sanitize_cell(row["message"]),
+        sanitize_cell(row["evidence_path"]),
         line if line is not None else "",
-        ";".join(json.loads(row["tags_json"])),
-        ";".join(json.loads(row["mitre_json"])),
+        sanitize_cell(";".join(json.loads(row["tags_json"]))),
+        sanitize_cell(";".join(json.loads(row["mitre_json"]))),
         row["confidence"],
-        row["parser"],
+        sanitize_cell(row["parser"]),
         row["repeat_count"],
     ]
 
@@ -206,7 +217,12 @@ class Timeline:
         self.path = Path(path)
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(PRAGMAS_SQL)
         self.conn.executescript(SCHEMA_SQL)
+
+    def create_indexes(self) -> None:
+        """Build secondary indexes (deferred to after bulk insert)."""
+        self.conn.executescript(SECONDARY_INDEXES_SQL)
 
     @classmethod
     def build(
@@ -222,6 +238,7 @@ class Timeline:
             target.unlink()
         timeline = cls(target)
         timeline.add_events(events, collection_time_utc, batch=batch)
+        timeline.create_indexes()
         return timeline
 
     def close(self) -> None:
@@ -358,7 +375,9 @@ class Timeline:
 
     def write_jsonl(self, path: str | Path) -> int:
         count = 0
-        with open(path, "w", encoding="utf-8") as handle:
+        target = Path(path)
+        tmp = target.with_name(target.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as handle:
             for row in self.conn.execute(f"SELECT * FROM events WHERE timestamp_utc IS NOT NULL ORDER BY {ORDER_BY}"):
                 handle.write(_row_to_json(row) + "\n")
                 count += 1
@@ -367,11 +386,16 @@ class Timeline:
             ):
                 handle.write(_row_to_json(row) + "\n")
                 count += 1
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
         return count
 
     def write_csv(self, path: str | Path) -> int:
         count = 0
-        with open(path, "w", encoding="utf-8", newline="") as handle:
+        target = Path(path)
+        tmp = target.with_name(target.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(CSV_HEADER)
             for row in self.conn.execute(f"SELECT * FROM events WHERE timestamp_utc IS NOT NULL ORDER BY {ORDER_BY}"):
@@ -382,4 +406,7 @@ class Timeline:
             ):
                 writer.writerow(_row_to_csv(row))
                 count += 1
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
         return count

@@ -22,13 +22,13 @@ RULE_SPRAY = "ssh_password_spraying"
 RULE_INFO = {
     RULE_SUCCESS: {
         "why": (
-            "Repeated failed logins followed by a success from the same source means an attacker "
-            "very likely guessed or brute-forced valid credentials and now holds interactive access."
+            "Repeated failed logins followed by a success from the same source means valid "
+            "credentials were very likely guessed or brute-forced, and interactive access now exists."
         ),
         "next_steps": [
             "Isolate the host from the network if the session may still be active.",
-            "Force a password reset (and key rotation) for the compromised account on all hosts.",
-            "Inspect ~/.ssh/authorized_keys for newly added keys and remove attacker keys.",
+            "Force a password reset (and key rotation) for the account on all hosts.",
+            "Inspect ~/.ssh/authorized_keys for newly added keys and remove unauthorized keys.",
             "Review shell history, cron jobs and systemd units for post-compromise persistence.",
             "Block the source IP at the perimeter and hunt for it in other hosts' auth logs.",
         ],

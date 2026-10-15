@@ -1,4 +1,4 @@
-"""Attacker-tool package installs (nmap, netcat, password crackers...).
+"""Dual-use tool package installs (nmap, netcat, password crackers...).
 
 Context-aware severity so base-image provisioning does not alert:
 - explicit `apt install <tool>` naming the tool -> MEDIUM (as before);
@@ -28,7 +28,9 @@ RULE_INFO = {
     RULE: {
         "why": (
             "Scanners, netcat-style implants and password crackers installed via "
-            "the package manager are the attacker's own tooling landing on the host."
+            "the package manager are dual-use tooling whose arrival red-team "
+            "assessments and malicious use both produce; the install record "
+            "shows the tool landed, not who wanted it there."
         ),
         "next_steps": [
             "Determine who installed the tool (shell history, auth logs, apt history Commandline).",
@@ -168,7 +170,7 @@ def detect(events: Iterable[Event], config: dict | None = None) -> list[Finding]
                 id=make_finding_id(RULE, tool, ",".join(names)),
                 rule=RULE,
                 severity=severity,
-                title=f"Attacker tool installed: {', '.join(names)} ({why})",
+                title=f"Dual-use tool package installed: {', '.join(names)} ({why})",
                 description=(
                     f"{len(group['events'])} install/update record(s) for {tool}-family tooling "
                     f"[{why}]: " + " | ".join(event.message[:160] for event in group["events"][:4])

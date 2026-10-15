@@ -146,16 +146,25 @@ def _listener_findings(events: Iterable[Event], allowed_ports: set[int]) -> list
         if port in allowed_ports:
             continue
         process = fields.get("process", "-")
+        loopback = (
+            local.startswith("127.")
+            or local.startswith("[::1]")
+            or local == "::1"
+            or local.startswith("localhost:")
+        )
+        severity = Severity.LOW if loopback else Severity.MEDIUM
+        scope = "loopback-only" if loopback else "network-reachable"
         findings.append(
             Finding(
                 id=make_finding_id(RULE, local, "unexpected-listener"),
                 rule=RULE,
-                severity=Severity.MEDIUM,
+                severity=severity,
                 title=f"Unexpected listener on port {port} ({local})",
                 description=(
-                    f"A process ({process}) is listening on {local}, which is outside "
-                    "the configured allowed-port set. Unexpected listeners often mean "
-                    "a backdoor or C2 callback channel."
+                    f"A process ({process}) is listening on {local} ({scope}), which is "
+                    "outside the configured allowed-port set. Unexpected listeners often mean "
+                    "a backdoor or C2 callback channel; loopback-only binds are less exposed "
+                    "but still warrant review of the owning service."
                 ),
                 mitre_ids=["T1059.004"],
                 first_seen=event.timestamp_utc,
@@ -171,7 +180,6 @@ def detect(events: Iterable[Event], config: dict | None = None) -> list[Finding]
     process_cfg = cfg.get("processes", {})
     scratch_paths = tuple(cfg.get("scratch_exec", {}).get("paths", list(SCRATCH_PREFIXES)))
     allowed = {int(port) for port in process_cfg.get("allowed_ports", [22, 80, 443, 53])}
-    events = list(events)
     findings = _process_findings(events, process_cfg, scratch_paths)
     findings.extend(_listener_findings(events, allowed))
     return findings

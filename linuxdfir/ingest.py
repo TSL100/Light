@@ -25,6 +25,14 @@ GZIP_MAGIC = b"\x1f\x8b"
 SIDECAR_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
+# Resource caps against hostile evidence (tar/gzip bombs, absurd members).
+MAX_MEMBER_COUNT = 50_000
+MAX_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
+MAX_MEMBER_READ_BYTES = 1024 * 1024 * 1024
+MAX_DECOMPRESSED_RATIO = 200
+MAX_MANIFEST_BYTES = 8 * 1024 * 1024
+MAX_LINE_LENGTH = 64 * 1024
+
 RULE_INFO = {
     "evidence_integrity": {
         "why": (
@@ -87,6 +95,8 @@ def _check_member_name(name: str) -> None:
         raise UnsafeArchiveError(f"absolute member path rejected: {name!r}")
     if ".." in name.split("/"):
         raise UnsafeArchiveError(f"parent-directory member path rejected: {name!r}")
+    if any(ord(char) < 32 or ord(char) == 127 for char in name):
+        raise UnsafeArchiveError(f"member name contains control characters: {name!r}")
 
 
 def _check_link_target(name: str, target: str) -> None:
@@ -104,14 +114,21 @@ class Evidence:
         self._root: Path | None = None
         if kind == "archive":
             assert _tar is not None
-            self._members = sorted(m.name for m in _tar.getmembers() if m.isfile())
+            members = sorted(m.name for m in _tar.getmembers() if m.isfile())
         else:
             self._root = self.source
-            self._members = sorted(
+            members = sorted(
                 path.relative_to(self._root).as_posix()
                 for path in sorted(self._root.rglob("*"))
                 if path.is_file()
             )
+        if len(members) > MAX_MEMBER_COUNT:
+            raise UnsafeArchiveError(
+                f"evidence holds {len(members)} members (limit {MAX_MEMBER_COUNT})"
+            )
+        for name in members:
+            _check_member_name(name)
+        self._members = members
         self.manifest: dict = self._load_manifest()
         self.context = self._build_context()
         self.tzinfo, self.tz_source = resolve_tzinfo(
@@ -135,10 +152,20 @@ class Evidence:
             except (tarfile.TarError, OSError) as exc:
                 raise EvidenceError(f"cannot open archive {path}: {exc}") from exc
             try:
-                for member in tar.getmembers():
+                members = tar.getmembers()
+                if len(members) > MAX_MEMBER_COUNT:
+                    raise UnsafeArchiveError(
+                        f"archive holds {len(members)} members (limit {MAX_MEMBER_COUNT})"
+                    )
+                for member in members:
                     _check_member_name(member.name)
                     if member.issym() or member.islnk():
                         _check_link_target(member.name, member.linkname)
+                    if member.isfile() and member.size > MAX_MEMBER_BYTES:
+                        raise UnsafeArchiveError(
+                            f"member declares {member.size} bytes "
+                            f"(limit {MAX_MEMBER_BYTES}): {member.name}"
+                        )
             except UnsafeArchiveError:
                 tar.close()
                 raise
@@ -164,12 +191,12 @@ class Evidence:
 
     def _load_manifest(self) -> dict:
         try:
-            raw = self.read_bytes("manifest.json")
+            raw = self.read_bytes("manifest.json", limit=MAX_MANIFEST_BYTES)
         except EvidenceError as exc:
             raise EvidenceError(f"manifest.json unreadable in {self.source}: {exc}") from exc
         try:
             manifest = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise EvidenceError(f"manifest.json is not valid JSON in {self.source}: {exc}") from exc
         if not isinstance(manifest, dict) or "files" not in manifest:
             raise EvidenceError(f"manifest.json has no files[] section in {self.source}")
@@ -196,7 +223,8 @@ class Evidence:
             tag=manifest.get("tag"),
         )
 
-    def read_bytes(self, member: str) -> bytes:
+    def _open_member_stream(self, member: str):
+        """Open a raw binary stream over one member (never decompressed)."""
         if self.kind == "archive":
             assert self._tar is not None
             try:
@@ -208,25 +236,125 @@ class Evidence:
             handle = self._tar.extractfile(info)
             if handle is None:
                 raise EvidenceError(f"member unreadable: {member}")
-            return handle.read()
+            return handle
         assert self._root is not None
         target = (self._root / member).resolve()
         if target != self._root.resolve() and self._root.resolve() not in target.parents:
             raise UnsafeArchiveError(f"member escapes evidence root: {member}")
         try:
-            return target.read_bytes()
+            return open(target, "rb")
         except OSError as exc:
             raise EvidenceError(f"member unreadable: {member}: {exc}") from exc
 
-    def iter_lines(self, member: str) -> Iterator[tuple[int, str]]:
-        data = self.read_bytes(member)
-        if data[:2] == GZIP_MAGIC:
+    def _member_declared_size(self, member: str) -> int:
+        if self.kind == "archive":
+            assert self._tar is not None
             try:
-                data = gzip.decompress(data)
+                return self._tar.getmember(member).size
+            except KeyError:
+                raise EvidenceError(f"member not in archive: {member}") from None
+        assert self._root is not None
+        try:
+            return (self._root / member).stat().st_size
+        except OSError as exc:
+            raise EvidenceError(f"member unreadable: {member}: {exc}") from exc
+
+    def read_bytes(self, member: str, *, limit: int | None = None) -> bytes:
+        cap = MAX_MEMBER_READ_BYTES if limit is None else limit
+        stream = self._open_member_stream(member)
+        try:
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = stream.read(CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > cap:
+                    raise EvidenceError(
+                        f"member exceeds size limit ({cap} bytes): {member}"
+                    )
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            stream.close()
+
+    def iter_lines(self, member: str) -> Iterator[tuple[int, str]]:
+        """Yield (lineno, line) streaming the member; never loads it whole.
+
+        Gzip members are decompressed with absolute and ratio caps; single
+        lines longer than MAX_LINE_LENGTH are truncated so downstream
+        regexes stay bounded.
+        """
+        stream = self._open_member_stream(member)
+        try:
+            first = stream.read(CHUNK)
+            if first[:2] == GZIP_MAGIC:
+                try:
+                    stream.seek(0)
+                except (OSError, ValueError) as exc:
+                    raise EvidenceError(f"cannot rewind gzip member: {member}: {exc}") from exc
+                source = stream
+                limit = min(
+                    MAX_MEMBER_READ_BYTES,
+                    self._member_declared_size(member) * MAX_DECOMPRESSED_RATIO,
+                )
+                first_chunk = b""
+                raw_gzip = True
+            else:
+                source = stream
+                limit = MAX_MEMBER_READ_BYTES
+                first_chunk = first
+                raw_gzip = False
+            seen = 0
+            text_buffer = ""
+            lineno = 0
+
+            def _bounded_read() -> bytes:
+                nonlocal first_chunk
+                if first_chunk:
+                    chunk, first_chunk = first_chunk, b""
+                else:
+                    chunk = source.read(CHUNK)
+                return chunk
+
+            gzip_src = gzip.GzipFile(fileobj=stream) if raw_gzip else None
+            try:
+                while True:
+                    if gzip_src is not None:
+                        chunk = gzip_src.read(CHUNK)
+                    else:
+                        chunk = _bounded_read()
+                    if not chunk:
+                        break
+                    seen += len(chunk)
+                    if seen > limit:
+                        raise EvidenceError(
+                            f"member exceeds decompressed size limits: {member}"
+                        )
+                    text_buffer += chunk.decode("utf-8", errors="replace")
+                    parts = text_buffer.split("\n")
+                    text_buffer = parts.pop()
+                    for part in parts:
+                        lineno += 1
+                        if part.endswith("\r"):
+                            part = part[:-1]
+                        if len(part) > MAX_LINE_LENGTH:
+                            part = part[:MAX_LINE_LENGTH]
+                        yield lineno, part
             except OSError as exc:
-                raise EvidenceError(f"member is not valid gzip: {member}: {exc}") from exc
-        text = data.decode("utf-8", errors="replace")
-        yield from enumerate(text.splitlines(), start=1)
+                raise EvidenceError(
+                    f"member is not valid gzip or unreadable: {member}: {exc}"
+                ) from exc
+            if text_buffer:
+                lineno += 1
+                if text_buffer.endswith("\r"):
+                    text_buffer = text_buffer[:-1]
+                if len(text_buffer) > MAX_LINE_LENGTH:
+                    text_buffer = text_buffer[:MAX_LINE_LENGTH]
+                yield lineno, text_buffer
+        finally:
+            stream.close()
 
     def display_path(self, member: str) -> str:
         return self.archive_to_original.get(member, member)
@@ -300,7 +428,17 @@ class Evidence:
                 result["status"] = "missing"
                 buckets["missing"].append(archive_path or entry["name"])
             else:
-                actual = hashlib.sha256(self.read_bytes(archive_path)).hexdigest()
+                digest = hashlib.sha256()
+                stream = self._open_member_stream(archive_path)
+                try:
+                    while True:
+                        chunk = stream.read(CHUNK)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                finally:
+                    stream.close()
+                actual = digest.hexdigest()
                 result["actual_sha256"] = actual
                 if actual.lower() == expected.lower():
                     result["status"] = "ok"

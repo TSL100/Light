@@ -14,13 +14,28 @@ from pathlib import Path
 
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("detection.toml")
 
+MAX_CONFIG_BYTES = 4 * 1024 * 1024
+
 FALLBACK_DEFAULTS: dict = {
     "package_tools": {
         "tools": ["nmap", "netcat", "hydra", "john", "masscan", "tcpdump", "socat"],
     },
     "bulk_batch": {"threshold": 50, "window_minutes": 10},
     "default_image_packages": {"packages": ["netcat-openbsd"]},
-    "timestomp": {"threshold_days": 1},
+    "timestomp": {
+        "threshold_days": 1,
+        "allowlist_paths": [
+            "/usr/lib/wsl/",
+            "/init",
+            "/var/cache/apt/",
+            "/var/lib/apt/",
+            "/var/lib/dpkg/",
+        ],
+    },
+    "offensive_tools": {
+        "extra_names": [],
+        "extra_tunnel_names": [],
+    },
     "suid": {
         "allowlist": [
             "/usr/bin/sudo", "/usr/bin/su", "/bin/su",
@@ -37,6 +52,10 @@ FALLBACK_DEFAULTS: dict = {
             "/usr/lib/dbus-1.0/dbus-daemon-launch-helper",
             "/usr/libexec/dbus-daemon-launch-helper",
             "/usr/lib/openssh/ssh-keysign",
+            "/usr/bin/chage", "/usr/bin/expiry",
+            "/usr/sbin/unix_chkpwd", "/usr/sbin/pam_extrausers_chkpwd",
+            "/usr/lib/x86_64-linux-gnu/utempter/utempter",
+            "/usr/lib/polkit-1/polkit-agent-helper-1",
         ],
         "writable_paths": ["/tmp/", "/var/tmp/", "/dev/shm/", "/home/", "/root/"],
     },
@@ -70,6 +89,7 @@ FALLBACK_DEFAULTS: dict = {
     },
     "scoring": {
         "cap": 100,
+        "decay": 0.5,
         "weights": {"critical": 100, "high": 40, "medium": 10, "low": 2, "info": 0},
     },
     "severity_overrides": {},
@@ -81,8 +101,13 @@ FALLBACK_DEFAULTS: dict = {
 
 
 def _load_toml(path: Path) -> dict:
-    with open(path, "rb") as handle:
-        data = tomllib.load(handle)
+    if path.stat().st_size > MAX_CONFIG_BYTES:
+        raise ValueError(f"config exceeds size limit ({MAX_CONFIG_BYTES} bytes): {path}")
+    try:
+        with open(path, "rb") as handle:
+            data = tomllib.load(handle)
+    except RecursionError as exc:
+        raise ValueError(f"config is nested too deeply: {path}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"config is not a TOML table: {path}")
     return data

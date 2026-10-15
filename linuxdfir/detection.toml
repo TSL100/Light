@@ -25,6 +25,30 @@ packages = ["netcat-openbsd"]
 # ctime more than threshold_days after mtime counts as a timestomp
 # indicator. Thresholds below ~1 day produce noise from package installs.
 threshold_days = 1
+# Path prefixes with known benign provenance (package-manager internals and
+# WSL system copies). These are NOT skipped: a finding is still emitted but
+# its severity is lowered to INFO and the finding text names the exact
+# provenance condition (path prefix + owner uid/gid) that lowered it, so the
+# downgrade is auditable. Rotated logs under /var/log (name patterns like
+# .1, .1.gz, -YYYYMMDD, trailing ~) are likewise lowered to INFO, never
+# dropped.
+allowlist_paths = [
+    "/usr/lib/wsl/",
+    "/init",
+    "/var/cache/apt/",
+    "/var/lib/apt/",
+    "/var/lib/dpkg/",
+]
+
+[offensive_tools]
+# Extra directory/file name prefixes treated as offensive tooling or tunnel
+# clients by the offensive_tool_paths detector. Matched case-insensitively
+# against any path component, so "evilgophish" also matches
+# /root/evilgophish-1. Findings are INFO/LOW and are deliberately NOT
+# subject to the timestomp provenance allowlist (a package path explains
+# timestamp drift, not the presence of a tool).
+# extra_names = ["your-c2-framework"]
+# extra_tunnel_names = ["your-tunnel-client"]
 
 [suid]
 # SUID/SGID binaries expected on a normal host. Anything outside this
@@ -45,6 +69,11 @@ allowlist = [
     "/usr/lib/dbus-1.0/dbus-daemon-launch-helper",
     "/usr/libexec/dbus-daemon-launch-helper",
     "/usr/lib/openssh/ssh-keysign",
+    # shadow-utils / PAM helpers that ship SUID/SGID on Debian and Ubuntu.
+    "/usr/bin/chage", "/usr/bin/expiry",
+    "/usr/sbin/unix_chkpwd", "/usr/sbin/pam_extrausers_chkpwd",
+    "/usr/lib/x86_64-linux-gnu/utempter/utempter",
+    "/usr/lib/polkit-1/polkit-agent-helper-1",
 ]
 writable_paths = ["/tmp/", "/var/tmp/", "/dev/shm/", "/home/", "/root/"]
 
@@ -90,10 +119,18 @@ allowlist_images = [
 ]
 
 [scoring]
-# Host risk score = sum of per-finding severity weights, capped at `cap`.
-# Weights are fully transparent: every contributing finding is listed in
-# risk.json and the HTML report.
+# Host risk score uses a two-stage bounded formula (never hard-saturates):
+#   1. per-rule diminishing returns: findings of the same rule are sorted by
+#      weight and each subsequent finding counts decay^i of its weight, so a
+#      noisy rule is capped at max_weight/(1-decay) no matter how many
+#      findings it emits;
+#   2. smooth asymptote: score = cap*(1-exp(-total/cap)) — strictly
+#      increasing in evidence but never reaching `cap`.
+# Weights are fully transparent: every contributing finding (raw and
+# damped weight) is listed in risk.json and the HTML report.
 cap = 100
+# Per-rule decay applied to all but the largest finding of each rule.
+decay = 0.5
 [scoring.weights]
 critical = 100
 high = 40

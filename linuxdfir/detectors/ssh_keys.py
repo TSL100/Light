@@ -12,7 +12,7 @@ RULE = "new_authorized_keys"
 RULE_INFO = {
     RULE: {
         "why": (
-            "Attackers persist with SSH keys: an extra root key, a forced command, or "
+            "SSH keys persist access: an extra root key, a forced command, or "
             "keys for service accounts that should never log in interactively."
         ),
         "next_steps": [
@@ -32,10 +32,9 @@ def _shell_allows_login(shell: str | None) -> bool:
 
 
 def detect(events: Iterable[Event]) -> list[Finding]:
-    materialized = list(events)
-    keys: list[Event] = [event for event in materialized if event.event_type == "ssh_key"]
+    keys: list[Event] = [event for event in events if event.event_type == "ssh_key"]
     shells: dict[str, str | None] = {}
-    for event in materialized:
+    for event in events:
         if event.event_type != "user_account":
             continue
         info = parse_account_message(event.message)

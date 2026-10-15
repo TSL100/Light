@@ -16,7 +16,7 @@ RULE_INFO = {
     RULE: {
         "why": (
             "Scheduled tasks and services executing from /tmp, /dev/shm, /var/tmp or "
-            "hidden directories run from attacker-writable locations that rarely survive "
+            "hidden directories run from world-writable locations that rarely survive "
             "reboots or scrutiny: a textbook persistence implant."
         ),
         "next_steps": [

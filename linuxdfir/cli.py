@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import __version__
 from .config import load_config
 from .correlate import correlate_findings
+from .custody import current_argv, input_fingerprint, write_analysis_log
 from .detectors import detect_all
 from .ingest import Evidence, EvidenceError, UnsafeArchiveError
 from .iocs import extract_iocs
@@ -23,6 +28,97 @@ from .timeline import Timeline
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_INTEGRITY = 2
+
+_CONTROL_CHARS_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
+)
+
+
+def term_safe(text: str) -> str:
+    """Strip ANSI escapes and control characters before terminal output."""
+    return _CONTROL_CHARS_RE.sub("", str(text))
+
+
+class _Progress:
+    """Throttled stderr progress; enabled by TTY or LINUXDFIR_PROGRESS=1."""
+
+    def __init__(self, label: str, enabled: bool | None = None):
+        if enabled is None:
+            env = os.environ.get("LINUXDFIR_PROGRESS")
+            enabled = env == "1" or (env is None and sys.stderr.isatty())
+        self.label = label
+        self.enabled = bool(enabled)
+        self._last = 0.0
+
+    def update(self, detail: str, *, force: bool = False) -> None:
+        if not self.enabled:
+            return
+        now = time.monotonic()
+        if not force and now - self._last < 1.0:
+            return
+        self._last = now
+        print(f"[{self.label}] {detail}", file=sys.stderr, flush=True)
+
+
+class EventFile:
+    """Re-iterable event stream over events.jsonl.
+
+    Every iteration re-reads and re-parses the file so detectors and the
+    IOC/scoring passes never materialize the whole event set in RAM.
+    ``count``/``skipped`` are recorded on the first full pass.
+    """
+
+    def __init__(self, path: Path):
+        if path.is_dir():
+            path = path / "events.jsonl"
+        self.path = path
+        self.count = 0
+        self.skipped = 0
+        self.passes = 0
+        self._progress = _Progress("events")
+
+    def __iter__(self):
+        count = 0
+        skipped = 0
+        self.passes += 1
+        self._progress.update(f"reading {self.path.name} (pass {self.passes})", force=True)
+        with open(self.path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = Event.from_dict(json.loads(line))
+                except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                    skipped += 1
+                    continue
+                count += 1
+                if count % 1_000_000 == 0:
+                    self._progress.update(f"pass {self.passes}: {count:,} events")
+                yield event
+        if self.passes == 1:
+            self.count = count
+            self.skipped = skipped
+        self._progress.update(
+            f"pass {self.passes} done: {count:,} events, {skipped} skipped", force=True
+        )
+
+    def load_all(self) -> list[Event]:
+        """Materialize the whole event set in a single pass.
+
+        ``detect`` runs ~20 detectors plus IOC extraction and scoring. If
+        each consumer iterated the stream it would re-read and re-parse
+        events.jsonl from disk once per consumer (measured: ~16.7s per pass
+        per 1M events, so tens of minutes on 13M-event evidence). Reading it
+        exactly once and handing every consumer the same list makes detect
+        single-pass while keeping per-consumer memory identical to before.
+        """
+        events = list(self)
+        self._progress.update(
+            f"loaded {len(events):,} events into memory (single pass)",
+            force=True,
+        )
+        return events
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _print_verify_summary(report: dict, findings: list) -> None:
     print(f"source           : {report['source']} ({report['kind']})")
-    print(f"host             : {report['hostname']}")
+    print(f"host             : {term_safe(str(report['hostname']))}")
     print(f"collected (UTC)  : {report['collection_time_utc']}")
     print(f"sidecar          : {report['sidecar']['status']}")
     counts = report["counts"]
@@ -92,11 +188,11 @@ def _print_verify_summary(report: dict, findings: list) -> None:
     )
     for key in ("mismatch", "missing", "extra"):
         for name in report[key]:
-            print(f"  {key.upper():8} {name}")
+            print(f"  {key.upper():8} {term_safe(str(name))}")
     if findings:
         print(f"integrity findings : {len(findings)}")
         for finding in findings:
-            print(f"  [{finding.severity.value.upper():8}] {finding.title}")
+            print(f"  [{finding.severity.value.upper():8}] {term_safe(finding.title)}")
     print(f"integrity        : {'OK' if report['integrity_ok'] else 'FAILED'}")
 
 
@@ -106,7 +202,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             report = evidence.verify()
             findings = evidence.integrity_findings
     except (EvidenceError, UnsafeArchiveError) as exc:
-        print(f"verify failed: {exc}", file=sys.stderr)
+        print(f"verify failed: {term_safe(exc)}", file=sys.stderr)
         return EXIT_INTEGRITY
     except OSError as exc:
         print(f"verify failed: {exc}", file=sys.stderr)
@@ -140,18 +236,29 @@ def run_parse_pipeline(evidence: Evidence, outdir: Path, names: list[str], selec
     """
     outdir.mkdir(parents=True, exist_ok=True)
     member_stats: list[dict] = []
+    progress = _Progress("parse")
+    event_total = 0
 
     def generate():
+        nonlocal event_total
         for name in names:
             module = selected[name]
             for member in iter_members(evidence, module.CONSUMES):
                 stats: dict = {}
+                progress.update(f"{name}: {member}")
                 try:
-                    yield from module.parse_member(evidence, member, stats=stats)
+                    for event in module.parse_member(evidence, member, stats=stats):
+                        event_total += 1
+                        if event_total % 500_000 == 0:
+                            progress.update(f"{event_total:,} events parsed")
+                        yield event
                 except (EvidenceError, UnsafeArchiveError) as exc:
                     stats["error"] = str(exc)
                 finally:
                     member_stats.append({"parser": name, **stats})
+                    progress.update(
+                        f"{name}: {member} done ({event_total:,} events)", force=True
+                    )
             parse_manifest = getattr(module, "parse_manifest", None)
             if parse_manifest is not None:
                 stats = {}
@@ -176,6 +283,7 @@ def run_parse_pipeline(evidence: Evidence, outdir: Path, names: list[str], selec
     )
     skipped: list[dict] = []
     for member in skipped_members(evidence):
+        progress.update(f"counting skipped member {member}", force=True)
         lines = 0
         try:
             for _lineno, _line in evidence.iter_lines(member):
@@ -251,16 +359,20 @@ def _print_parse_summary(outdir: Path, names: list[str], summary: dict) -> None:
         )
     for entry in summary["members"]:
         if entry.get("error"):
-            print(f"  {entry.get('parser')} {entry.get('member')}: ERROR {entry['error']}")
+            print(
+                f"  {entry.get('parser')} {term_safe(str(entry.get('member')))}: "
+                f"ERROR {term_safe(entry['error'])}"
+            )
     for entry in summary["skipped"]:
-        print(f"  skipped {entry['member']}: {entry['lines']} lines (not an event source)")
+        print(f"  skipped {term_safe(entry['member'])}: {entry['lines']} lines (not an event source)")
 
 
 def cmd_parse(args: argparse.Namespace) -> int:
+    started = datetime.now(UTC)
     try:
         evidence = Evidence.open(args.evidence)
     except (EvidenceError, UnsafeArchiveError) as exc:
-        print(f"parse failed: {exc}", file=sys.stderr)
+        print(f"parse failed: {term_safe(exc)}", file=sys.stderr)
         return EXIT_ERROR
     with evidence:
         try:
@@ -271,57 +383,73 @@ def cmd_parse(args: argparse.Namespace) -> int:
         outdir = Path(args.out)
         summary = run_parse_pipeline(evidence, outdir, names, selected)
         _print_parse_summary(outdir, names, summary)
+        kind, digest = input_fingerprint(args.evidence)
+        write_analysis_log(
+            outdir,
+            argv=getattr(args, "_argv", None) or current_argv(None),
+            evidence_source=args.evidence,
+            evidence_kind=kind,
+            input_sha256=digest,
+            started_utc=started,
+            ended_utc=datetime.now(UTC),
+            config=None,
+            config_source="not used (parse-only run)",
+            parser_names=names,
+        )
     return EXIT_OK
 
 
-def _load_events(path: Path) -> list[Event]:
-    if path.is_dir():
-        path = path / "events.jsonl"
-    events = []
-    skipped = 0
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(Event.from_dict(json.loads(line)))
-            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-                skipped += 1
-    return events, skipped
+def _load_events(path: Path) -> EventFile:
+    """Return a re-iterable event stream (no upfront materialization)."""
+    stream = EventFile(path)
+    if not stream.path.is_file():
+        raise OSError(f"events file not found: {stream.path}")
+    return stream
 
 
 def cmd_detect(args: argparse.Namespace) -> int:
     try:
-        events, skipped = _load_events(Path(args.events))
+        stream = _load_events(Path(args.events))
     except OSError as exc:
         print(f"detect failed: {exc}", file=sys.stderr)
         return EXIT_ERROR
     try:
         config = load_config(getattr(args, "config", None))
     except (OSError, ValueError) as exc:
-        print(f"detect failed: bad config: {exc}", file=sys.stderr)
+        print(f"detect failed: bad config: {term_safe(exc)}", file=sys.stderr)
         return EXIT_ERROR
+    try:
+        events: list[Event] = stream.load_all()
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        print(
+            f"detect failed: cannot read events from {stream.path} "
+            f"(expected JSONL from `parse`): {term_safe(exc)}",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    progress = _Progress("detect")
+    progress.update(f"running detectors over {len(events):,} events", force=True)
     findings = postprocess_findings(detect_all(events, config=config), config)
     info_count = sum(1 for finding in findings if finding.severity == Severity.INFO)
     real_count = len(findings) - info_count
     headline = f"{real_count} actionable + {info_count} info"
     if args.out:
         outdir = Path(args.out)
-        outdir.mkdir(parents=True, exist_ok=True)
-        json_report.write_findings(findings, outdir / "findings.json")
-        iocs = extract_iocs(events, findings, config)
-        (outdir / "iocs.json").write_text(
-            json.dumps(iocs, indent=2) + "\n", encoding="utf-8"
-        )
-        correlation = correlate_findings(findings, config)
-        (outdir / "correlation.json").write_text(
-            json.dumps(correlation, indent=2) + "\n", encoding="utf-8"
-        )
-        risk = score_findings(findings, events, config)
-        (outdir / "risk.json").write_text(
-            json.dumps(risk, indent=2) + "\n", encoding="utf-8"
-        )
+        try:
+            outdir.mkdir(parents=True, exist_ok=True)
+            json_report.require_free_space(outdir)
+            json_report.write_findings(findings, outdir / "findings.json")
+            progress.update("scanning events for IOCs", force=True)
+            iocs = extract_iocs(events, findings, config)
+            json_report.atomic_write_json(outdir / "iocs.json", iocs)
+            correlation = correlate_findings(findings, config)
+            json_report.atomic_write_json(outdir / "correlation.json", correlation)
+            progress.update("computing risk scores", force=True)
+            risk = score_findings(findings, events, config)
+            json_report.atomic_write_json(outdir / "risk.json", risk)
+        except (OSError, json_report.WriteError) as exc:
+            print(f"detect failed while writing outputs: {term_safe(exc)}", file=sys.stderr)
+            return EXIT_ERROR
         print(f"findings         : {headline} -> {outdir / 'findings.json'}")
         print(
             f"iocs             : {len(iocs['external'])} external, "
@@ -340,13 +468,13 @@ def cmd_detect(args: argparse.Namespace) -> int:
             )
     else:
         print(f"findings         : {headline}")
-    if skipped:
-        print(f"skipped lines    : {skipped}")
+    if stream.skipped:
+        print(f"skipped lines    : {stream.skipped}")
     for finding in sorted(findings, key=lambda f: (f.severity.value, f.rule)):
         refs = ", ".join(f"{ref.evidence_path}:{ref.line_or_offset}" for ref in finding.refs[:3])
         extra = f" (+{len(finding.refs) - 3} more)" if len(finding.refs) > 3 else ""
-        print(f"  [{finding.severity.value.upper():8}] {finding.rule}: {finding.title}")
-        print(f"           count={finding.count} mitre={','.join(finding.mitre_ids)} refs={refs}{extra}")
+        print(f"  [{finding.severity.value.upper():8}] {finding.rule}: {term_safe(finding.title)}")
+        print(f"           count={finding.count} mitre={','.join(finding.mitre_ids)} refs={term_safe(refs)}{extra}")
     return EXIT_OK
 
 
@@ -369,11 +497,18 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    started = datetime.now(UTC)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
+    argv = getattr(args, "_argv", None) or current_argv(None)
     verify_code = cmd_verify(argparse.Namespace(evidence=args.evidence, report_dir=str(outdir)))
     parse_code = cmd_parse(
-        argparse.Namespace(evidence=args.evidence, out=str(outdir), parsers=args.parsers)
+        argparse.Namespace(
+            evidence=args.evidence,
+            out=str(outdir),
+            parsers=args.parsers,
+            _argv=argv,
+        )
     )
     if parse_code != EXIT_OK:
         return parse_code
@@ -385,12 +520,37 @@ def cmd_run(args: argparse.Namespace) -> int:
     report_code = cmd_report(argparse.Namespace(out=str(outdir), report_name="report.html"))
     if report_code != EXIT_OK:
         return report_code
-    return EXIT_INTEGRITY if verify_code == EXIT_INTEGRITY else EXIT_OK
+    final_code = EXIT_INTEGRITY if verify_code == EXIT_INTEGRITY else EXIT_OK
+    try:
+        names, _ = resolve_parser_names(args.parsers)
+    except ValueError:
+        names = sorted(available_parsers())
+    try:
+        config = load_config(args.config)
+        config_source = args.config or "shipped detection.toml"
+    except (OSError, ValueError):
+        config, config_source = None, args.config or "shipped detection.toml"
+    kind, digest = input_fingerprint(args.evidence)
+    write_analysis_log(
+        outdir,
+        argv=argv,
+        evidence_source=args.evidence,
+        evidence_kind=kind,
+        input_sha256=digest,
+        started_utc=started,
+        ended_utc=datetime.now(UTC),
+        config=config,
+        config_source=config_source,
+        parser_names=names,
+        exit_code=final_code,
+    )
+    return final_code
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    args._argv = current_argv(argv)
     return args.func(args)
 
 

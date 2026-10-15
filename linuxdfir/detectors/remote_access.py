@@ -2,7 +2,7 @@
 
 Matches cloudflared/ngrok/frp/chisel/ligolo, socat with tunnel-like
 arguments, and tailscale/zerotier. These are dual-use: often legitimate
-remote administration, occasionally attacker exfiltration/C2 channels,
+remote administration, occasionally abused for exfiltration/C2 channels,
 so severities stay LOW (tunnels) and INFO (mesh VPNs) with that caveat
 spelled out in every finding.
 """

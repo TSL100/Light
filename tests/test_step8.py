@@ -217,7 +217,7 @@ class TestScore:
         assert host["score"] <= 10
         assert host["raw_score"] == 2
 
-    def test_weights_and_cap(self):
+    def test_weights_and_asymptote(self):
         findings = [
             _finding(rule="a", severity=Severity.CRITICAL, title="crit"),
             _finding(rule="b", severity=Severity.HIGH, title="high"),
@@ -225,7 +225,9 @@ class TestScore:
         result = score_findings(findings, [], {})
         host = next(iter(result["hosts"].values()))
         assert host["raw_score"] == 140
-        assert host["score"] == 100
+        # bounded asymptote: score = cap*(1-exp(-total/cap)) = 100*(1-e^-1.4)
+        assert host["score"] == 75.34
+        assert host["score"] < host["cap"]
         assert host["by_severity"] == {"critical": 1, "high": 1}
         assert {row["rule"] for row in host["breakdown"]} == {"a", "b"}
 
@@ -233,7 +235,31 @@ class TestScore:
         findings = [_finding(rule="a", severity=Severity.LOW, title="low")]
         result = score_findings(findings, [], {"scoring": {"weights": {"low": 50}}})
         host = next(iter(result["hosts"].values()))
-        assert host["score"] == 50
+        # single finding keeps its full (overridden) weight, then asymptote
+        assert host["raw_score"] == 50
+        assert host["score"] == 39.35
+
+    def test_same_rule_findings_diminish(self):
+        findings = [
+            _finding(rule="noisy", severity=Severity.LOW, title=f"low {i}", fid=f"f{i:03d}")
+            for i in range(20)
+        ]
+        result = score_findings(findings, [], {})
+        host = next(iter(result["hosts"].values()))
+        assert host["raw_score"] == 40
+        # decay 0.5 caps one rule at ~2*weight/(1-0.5)... sum 2*(1-.5^20) ~= 4
+        assert host["damped_total"] <= 4.0 + 1e-6
+        assert host["score"] < 5
+
+    def test_score_never_saturates(self):
+        findings = [
+            _finding(rule=f"r{i}", severity=Severity.CRITICAL, title=f"crit {i}", fid=f"c{i:03d}")
+            for i in range(20)
+        ]
+        result = score_findings(findings, [], {})
+        host = next(iter(result["hosts"].values()))
+        assert host["raw_score"] == 2000
+        assert host["score"] < host["cap"]
 
     def test_user_scores_split(self):
         findings = [
@@ -245,8 +271,9 @@ class TestScore:
             ),
         ]
         result = score_findings(findings, [], {})
-        assert result["users"]["alice"]["score"] == 20.0
-        assert result["users"]["bob"]["score"] == 20.0
+        # each user gets share=20, then asymptote 100*(1-e^-0.2)
+        assert result["users"]["alice"]["score"] == 18.13
+        assert result["users"]["bob"]["score"] == 18.13
 
     def test_host_from_events(self):
         events = [_event(host="web01"), _event(host="web01"), _event(host="db01")]
@@ -412,7 +439,9 @@ class TestEndToEndStep8:
     def test_infected_risk_and_refs(self, generated, tmp_path):
         findings, _iocs, _correlation, risk = _run_pipeline(generated, tmp_path, "infected")
         host = next(iter(risk["hosts"].values()))
-        assert host["score"] == 100
+        # bounded non-saturating score: high but strictly below the cap
+        assert host["score"] < host["cap"]
+        assert host["score"] > 50
         assert host["raw_score"] > 100
         assert risk["users"], "expected user attribution on infected host"
         rules = {f["rule"] for f in findings}

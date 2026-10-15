@@ -69,6 +69,7 @@ def step_sort_key(finding: Finding) -> tuple:
         stage_rank(finding),
         0 if finding.first_seen is None else 1,
         finding.first_seen or datetime.min.replace(tzinfo=UTC),
+        finding.id,
     )
 
 

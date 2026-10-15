@@ -13,7 +13,7 @@ RULE_INFO = {
     RULE: {
         "why": (
             "Permitting root logins or password authentication widens the set of "
-            "valid accounts an attacker can guess or reuse, and empty passwords "
+            "valid accounts that can be guessed or reused, and empty passwords "
             "remove the last barrier entirely."
         ),
         "next_steps": [

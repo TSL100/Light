@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -69,7 +70,7 @@ def _dt_from_str(value: str | None) -> datetime | None:
     return parsed
 
 
-@dataclass
+@dataclass(slots=True)
 class Event:
     timestamp_utc: datetime | None
     host: str | None
@@ -103,6 +104,20 @@ class Event:
         # carry a password, token or hash. Idempotent across from_dict().
         self.message = redact_secrets(self.message)
         self.raw = redact_secrets(self.raw)
+        # Intern low-cardinality string fields: materializing millions of
+        # events (detect reads events.jsonl once into RAM) otherwise stores
+        # one distinct str object per event for values like the event type
+        # or host name that repeat thousands of times. message/raw stay
+        # un-interned (high cardinality).
+        if self.host is not None:
+            self.host = sys.intern(self.host)
+        if self.user is not None:
+            self.user = sys.intern(self.user)
+        self.source_artifact = sys.intern(self.source_artifact)
+        self.event_type = sys.intern(self.event_type)
+        self.evidence_path = sys.intern(self.evidence_path)
+        self.parser = sys.intern(self.parser)
+        self.timestamp_quality = sys.intern(self.timestamp_quality)
 
     def to_dict(self) -> dict:
         return {

@@ -12,7 +12,7 @@ RULE = "new_user_or_sudoers_change"
 RULE_INFO = {
     RULE: {
         "why": (
-            "A second UID 0 account or a passwordless sudo grant hands attackers durable "
+            "A second UID 0 account or a passwordless sudo grant hands any local user durable "
             "root access that survives password rotations."
         ),
         "next_steps": [
@@ -26,15 +26,14 @@ RULE_INFO = {
 
 
 def detect(events: Iterable[Event]) -> list[Finding]:
-    materialized = list(events)
     accounts: list[tuple[Event, dict]] = []
-    for event in materialized:
+    for event in events:
         if event.event_type != "user_account":
             continue
         info = parse_account_message(event.message)
         if info is not None:
             accounts.append((event, info))
-    sudo_rules = [event for event in materialized if event.event_type == "sudo_rule"]
+    sudo_rules = [event for event in events if event.event_type == "sudo_rule"]
     findings: list[Finding] = []
 
     uid0 = [(event, info) for event, info in accounts if info["uid"] == 0]

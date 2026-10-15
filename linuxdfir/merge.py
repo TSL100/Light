@@ -139,13 +139,14 @@ def merge_duplicate_findings(findings: Iterable[Finding]) -> list[Finding]:
         groups.setdefault((path, finding.severity.value), []).append(finding)
 
     out: list[Finding] = list(ungrouped)
-    for (_path, _severity), members in groups.items():
+    for key in sorted(groups):
+        members = groups[key]
         if len(members) == 1:
             out.append(members[0])
             continue
         ordered = sorted(
             members,
-            key=lambda f: (-severity_rank(f.severity), -len(f.refs), f.rule),
+            key=lambda f: (-severity_rank(f.severity), -len(f.refs), f.rule, f.id),
         )
         primary = ordered[0]
         group_techniques = set(primary.mitre_ids)
@@ -163,7 +164,7 @@ def merge_duplicate_findings(findings: Iterable[Finding]) -> list[Finding]:
             out.append(primary)
         out.extend(leftovers)
 
-    out.sort(key=lambda finding: (finding.rule, finding.title))
+    out.sort(key=lambda finding: (finding.rule, finding.title, finding.id))
     return out
 
 

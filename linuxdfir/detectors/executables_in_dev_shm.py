@@ -1,9 +1,9 @@
 """Executable/hidden artifacts in world-writable scratch directories.
 
 Files in /tmp, /var/tmp and /dev/shm that carry the exec bit, sit in a
-hidden path, or whose archived content is an ELF binary are attacker
-tooling until proven otherwise (droppers, preload libs, reverse-shell
-binaries). Mode bits alone are unreliable on some evidence sources
+hidden path, or whose archived content is an ELF binary are treated as
+suspicious tooling until proven otherwise (droppers, preload libs,
+reverse-shell binaries). Mode bits alone are unreliable on some evidence sources
 (Windows-collected fixtures show 0666), so hidden-path and ELF-magic
 signals carry equal weight. Benign empty placeholder files are
 allowlisted via detection.toml.
@@ -25,7 +25,7 @@ USES_CONFIG = True
 RULE_INFO = {
     RULE: {
         "why": (
-            "World-writable directories are the attacker's staging area: droppers, "
+            "World-writable directories are a staging area: droppers, "
             "preload libraries and reverse-shell binaries land there precisely because "
             "nothing enforces what is executed from them."
         ),

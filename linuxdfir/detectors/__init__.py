@@ -18,6 +18,7 @@ from . import (
     ld_preload,
     login_anomalies,
     masked_services,
+    offensive_tools,
     package_install,
     recent_changes_in_sensitive_paths,
     remote_access,
@@ -49,6 +50,7 @@ DETECTOR_MODULES = (
     kernel_module,
     remote_access,
     timestomp_detection,
+    offensive_tools,
     executables_in_dev_shm,
     suspicious_processes,
     unusual_suid,
@@ -62,11 +64,16 @@ for _module in DETECTOR_MODULES:
 
 
 def detect_all(events: Iterable[Event], config: dict | None = None) -> list[Finding]:
-    materialized = list(events)
+    """Run every detector over the event stream.
+
+    ``events`` may be a list (shared across detectors) or a re-iterable
+    stream object (each detector gets its own pass, keeping peak memory
+    bounded on huge evidence).
+    """
     findings: list[Finding] = []
     for module in DETECTOR_MODULES:
         if getattr(module, "USES_CONFIG", False):
-            findings.extend(module.detect(materialized, config=config))
+            findings.extend(module.detect(events, config=config))
         else:
-            findings.extend(module.detect(materialized))
+            findings.extend(module.detect(events))
     return findings

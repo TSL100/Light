@@ -24,7 +24,7 @@ REPEAT_RE = re.compile(r"last message repeated (\d+) times?")
 KERNEL_TS_RE = re.compile(r"^\[\s*\d+\.\d+\]\s*")
 CRON_CMD_RE = re.compile(r"^\(([^)]+)\) CMD \((.*)\)$")
 SESSION_USER_RE = re.compile(r"session opened for user (\S+)")
-SYSTEMD_UNIT_RE = re.compile(r"(\S+\.(?:service|socket|timer|target|mount|slice|scope))")
+SYSTEMD_UNIT_RE = re.compile(r"\b([A-Za-z0-9_@:-]+\.(?:service|socket|timer|target|mount|slice|scope))\b")
 SYSTEMD_ACTION_RE = re.compile(
     r"\b(Starting|Started|Stopping|Stopped|Reloading|Reloaded|Failed|Reached|Mounting|Mounted)\b"
 )
