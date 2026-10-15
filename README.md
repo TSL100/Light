@@ -171,6 +171,17 @@ linuxdfir scan-secrets case-out -o case-out
 Scans collector output for accidental secret material and writes
 `scan_secrets.json`.
 
+### Optional YARA content scan
+
+```powershell
+pip install .[yara]
+linuxdfir scan-yara evidence.tar.gz --rules .\my-rules -o case-out
+linuxdfir run evidence.tar.gz -o case-out --yara-rules .\my-rules
+```
+
+Scans collected file bytes with your own `.yar`/`.yara` folder; each
+(file, rule) hit becomes a `yara_match` finding. Skipped cleanly when
+yara-python is missing. See `docs/DETECTIONS.md` (`yara_match`).
 ## Configuring detections
 
 Tune without touching code via a TOML file copied from

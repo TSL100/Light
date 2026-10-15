@@ -24,6 +24,7 @@ from .report import csv_report, html, json_report
 from .schema import Event, Finding, Severity
 from .score import score_findings
 from .timeline import Timeline
+from .yara_scan import scan_with_rules_dir
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -153,6 +154,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="detection tuning TOML (default: shipped detection.toml)",
     )
+    detect.add_argument(
+        "--yara-rules",
+        default=None,
+        help=(
+            "folder of .yar/.yara rules to scan collected file contents "
+            "(requires --evidence and yara-python; skipped cleanly if missing)"
+        ),
+    )
+    detect.add_argument(
+        "--evidence",
+        default=None,
+        help="evidence.tar.gz file or extracted folder to scan with --yara-rules",
+    )
     detect.set_defaults(func=cmd_detect)
     run = sub.add_parser("run", help="verify + parse + detect + report in one step")
     run.add_argument("evidence", help="evidence.tar.gz file or an extracted evidence folder")
@@ -166,6 +180,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         default=None,
         help="detection tuning TOML (default: shipped detection.toml)",
+    )
+    run.add_argument(
+        "--yara-rules",
+        default=None,
+        help=(
+            "folder of .yar/.yara rules to scan collected file contents "
+            "(requires yara-python; skipped cleanly if missing)"
+        ),
     )
     run.set_defaults(func=cmd_run)
     report = sub.add_parser("report", help="build report.html/findings.csv from a parsed output directory")
@@ -187,6 +209,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="maximum example lines to record per pattern (default: 5)",
     )
     secrets.set_defaults(func=cmd_scan_secrets)
+    yara = sub.add_parser(
+        "scan-yara",
+        help="scan collected file contents with YARA rules (optional dependency)",
+    )
+    yara.add_argument("evidence", help="evidence.tar.gz file or an extracted evidence folder")
+    yara.add_argument(
+        "--rules",
+        required=True,
+        help="folder of .yar/.yara rule files (compiled together)",
+    )
+    yara.add_argument(
+        "-o", "--out", default=None, help="output directory for yara_findings.json"
+    )
+    yara.add_argument(
+        "--config",
+        default=None,
+        help="detection tuning TOML (default: shipped detection.toml)",
+    )
+    yara.add_argument(
+        "--max-file-mb",
+        type=int,
+        default=None,
+        help="skip files larger than this (default: [yara].max_file_mb from config)",
+    )
+    yara.set_defaults(func=cmd_scan_yara)
     return parser
 
 
@@ -422,6 +469,18 @@ def _load_events(path: Path) -> EventFile:
     return stream
 
 
+def _print_yara_summary(stats: dict) -> None:
+    """One-line YARA outcome for detect/run/scan-yara output."""
+    if stats.get("status") == "skipped":
+        print(f"yara             : skipped ({term_safe(stats.get('reason', 'unavailable'))})")
+        return
+    print(
+        f"yara             : {stats['matches']} match(es), "
+        f"{stats['files_scanned']} file(s) scanned "
+        f"({stats['files_skipped_too_large']} too large, "
+        f"{stats['files_skipped_unreadable']} unreadable, "
+        f"{stats['files_skipped_no_content']} metadata-only)"
+    )
 def cmd_detect(args: argparse.Namespace) -> int:
     try:
         stream = _load_events(Path(args.events))
@@ -444,7 +503,32 @@ def cmd_detect(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     progress = _Progress("detect")
     progress.update(f"running detectors over {len(events):,} events", force=True)
-    findings = postprocess_findings(detect_all(events, config=config), config)
+    yara_rules = getattr(args, "yara_rules", None)
+    evidence_source = getattr(args, "evidence", None)
+    if yara_rules and not evidence_source:
+        print(
+            "detect failed: --yara-rules requires --evidence "
+            "(archive or folder whose file contents to scan)",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    base = detect_all(events, config=config)
+    yara_stats: dict | None = None
+    if yara_rules:
+        try:
+            with Evidence.open(evidence_source) as evidence:
+                yara_findings, yara_stats = scan_with_rules_dir(evidence, yara_rules, config)
+        except (EvidenceError, UnsafeArchiveError) as exc:
+            print(f"detect failed: cannot open evidence for YARA scan: {term_safe(exc)}", file=sys.stderr)
+            return EXIT_ERROR
+        except (OSError, ValueError) as exc:
+            print(f"detect failed: YARA scan: {term_safe(exc)}", file=sys.stderr)
+            return EXIT_ERROR
+        progress.update(
+            f"yara scan: {len(yara_findings)} match(es) ({yara_stats['status']})", force=True
+        )
+        base.extend(yara_findings)
+    findings = postprocess_findings(base, config)
     info_count = sum(1 for finding in findings if finding.severity == Severity.INFO)
     real_count = len(findings) - info_count
     headline = f"{real_count} actionable + {info_count} info"
@@ -483,6 +567,8 @@ def cmd_detect(args: argparse.Namespace) -> int:
             )
     else:
         print(f"findings         : {headline}")
+    if yara_stats is not None:
+        _print_yara_summary(yara_stats)
     if stream.skipped:
         print(f"skipped lines    : {stream.skipped}")
     for finding in sorted(findings, key=lambda f: (f.severity.value, f.rule)):
@@ -631,6 +717,48 @@ def cmd_scan_secrets(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_scan_yara(args: argparse.Namespace) -> int:
+    try:
+        config = load_config(getattr(args, "config", None))
+    except (OSError, ValueError) as exc:
+        print(f"scan-yara failed: bad config: {term_safe(exc)}", file=sys.stderr)
+        return EXIT_ERROR
+    try:
+        with Evidence.open(args.evidence) as evidence:
+            findings, stats = scan_with_rules_dir(
+                evidence, args.rules, config, max_file_mb=getattr(args, "max_file_mb", None)
+            )
+    except (EvidenceError, UnsafeArchiveError) as exc:
+        print(f"scan-yara failed: {term_safe(exc)}", file=sys.stderr)
+        return EXIT_ERROR
+    except (OSError, ValueError) as exc:
+        print(f"scan-yara failed: {term_safe(exc)}", file=sys.stderr)
+        return EXIT_ERROR
+    _print_yara_summary(stats)
+    for finding in sorted(findings, key=lambda f: (f.severity.value, f.rule)):
+        refs = ", ".join(f"{ref.evidence_path}:{ref.line_or_offset}" for ref in finding.refs[:3])
+        print(f"  [{finding.severity.value.upper():8}] {finding.rule}: {term_safe(finding.title)}")
+        print(f"           count={finding.count} mitre={','.join(finding.mitre_ids)} refs={term_safe(refs)}")
+    if args.out:
+        outdir = Path(args.out)
+        try:
+            outdir.mkdir(parents=True, exist_ok=True)
+            json_report.require_free_space(outdir)
+            json_report.atomic_write_json(
+                outdir / "yara_findings.json",
+                {
+                    "status": stats["status"],
+                    "rules_dir": stats.get("rules_dir"),
+                    "rules_files": stats.get("rules_files", []),
+                    "stats": stats,
+                    "findings": [finding.to_dict() for finding in findings],
+                },
+            )
+        except (OSError, json_report.WriteError) as exc:
+            print(f"scan-yara failed while writing outputs: {term_safe(exc)}", file=sys.stderr)
+            return EXIT_ERROR
+        print(f"report           : {outdir / 'yara_findings.json'}")
+    return EXIT_OK
 def cmd_run(args: argparse.Namespace) -> int:
     started = datetime.now(UTC)
     outdir = Path(args.out)
@@ -648,7 +776,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     if parse_code != EXIT_OK:
         return parse_code
     detect_code = cmd_detect(
-        argparse.Namespace(events=str(outdir), out=str(outdir), config=args.config)
+        argparse.Namespace(
+            events=str(outdir),
+            out=str(outdir),
+            config=args.config,
+            yara_rules=getattr(args, "yara_rules", None),
+            evidence=args.evidence,
+        )
     )
     if detect_code != EXIT_OK:
         return detect_code

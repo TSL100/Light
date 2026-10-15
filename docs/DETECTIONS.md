@@ -446,6 +446,39 @@ allowlist; add your workload images to it.
 
 ---
 
+## `yara_match` (optional content scanning)
+
+**Rule:** `yara_match` (default high, per-rule `meta` may override)
+
+**Logic.** Outside the event stream: `scan-yara`, or `detect`/`run
+--yara-rules <dir>`, compiles every `.yar`/`.yara` file in the given folder
+once and matches it against the bytes of each collected file that has
+content (`evidence/*` members with a hash; metadata-only, oversize, and
+unreadable files are counted as skipped, never fatal). Each (file, rule) hit
+becomes one finding whose title names the rule and whose refs point at the
+matched file.
+
+| Knob | Default | Meaning |
+| --- | --- | --- |
+| `[yara].severity` | `"high"` | finding severity unless the rule's own `meta: severity = "..."` overrides it |
+| `[yara].max_file_mb` | `16` | files larger than this are skipped (counted in stats) |
+
+A rule may also set `meta: mitre = "T1059, T1105"` to attach MITRE IDs.
+
+**Dependency.** Requires `yara-python` (`pip install .[yara]`). The import
+is lazy: without it the scan is **skipped cleanly** — `scan-yara` exits 0
+with `status: skipped`, and `detect`/`run` continue with the other detectors
+and print `yara : skipped (...)`. No rules are shipped; the analyst always
+supplies the folder, and an empty folder or uncompilable rules is an error,
+not a silent pass.
+
+**FP notes.** Content matches are high-confidence but rule-dependent: a broad
+rule (e.g. matching `curl`) will fire on legitimate admin tooling. Scope
+rules tightly and suppress noisy ones with `[allowlist].findings`
+(`rule = "yara_match"`) or `[severity_overrides]` like any other detector —
+YARA findings flow through the same postprocessing, scoring, and reporting.
+
+---
 ## Correlation and IOCs
 
 After detection, findings sharing an entity (IP, path, rare username) are

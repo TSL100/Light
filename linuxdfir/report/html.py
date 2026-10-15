@@ -195,6 +195,12 @@ SEVERITY_ORDER = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LO
 
 RULE_GUIDANCE = dict(DETECTOR_RULE_INFO)
 RULE_GUIDANCE.update(INGEST_RULE_INFO)
+try:
+    from ..yara_scan import RULE_INFO as YARA_RULE_INFO
+
+    RULE_GUIDANCE.update(YARA_RULE_INFO)
+except ImportError:  # pragma: no cover - yara_scan is dependency-free; defensive only
+    pass
 
 FALLBACK_GUIDANCE = {
     "why": "No analyst guidance is registered for this rule yet.",

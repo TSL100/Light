@@ -167,3 +167,12 @@ suppress = []
 # finding in login_anomalies.
 start = 8
 end = 18
+
+[yara]
+# Optional content scanning (`scan-yara`, or `detect`/`run --yara-rules`).
+# Rules are NEVER shipped: the analyst supplies a folder of .yar/.yara
+# files. Findings default to this severity unless a rule's own
+# `meta: severity = "..."` overrides it; files larger than max_file_mb
+# are skipped (still counted in the scan stats).
+severity = "high"
+max_file_mb = 16

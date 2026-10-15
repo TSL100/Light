@@ -97,6 +97,7 @@ FALLBACK_DEFAULTS: dict = {
     "correlation": {"min_chain_length": 2, "rare_user_max_findings": 5},
     "ioc": {"max_per_type": 200, "suppress": []},
     "business_hours": {"start": 8, "end": 18},
+    "yara": {"severity": "high", "max_file_mb": 16},
 }
 
 
